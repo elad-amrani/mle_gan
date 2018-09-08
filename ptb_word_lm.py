@@ -897,7 +897,7 @@ def main(_):
                                                                               dLossReal=dLossReal,
                                                                               dLossFake=dLossFake,
                                                                               dLoss=dLoss,
-                                                                              gLoss=gLossDual,
+                                                                              gLoss=gLoss,
                                                                               dOpt=dOpt,
                                                                               gOpt=gOptDual,
                                                                               epoch_num=i,
