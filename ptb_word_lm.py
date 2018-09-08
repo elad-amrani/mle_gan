@@ -93,6 +93,8 @@ flags.DEFINE_integer('gan_steps', 10,
                      'Train discriminator / generator for gan_steps mini-batches before switching')
 flags.DEFINE_float('gan_lr', 1e-3, 
                    'GAN learning rate')
+flags.DEFINE_integer('total_epochs', 26,
+                     'The total number of epochs for training')
 
 
 FLAGS = flags.FLAGS
@@ -354,7 +356,8 @@ class SmallConfig(object):
   num_steps = 20
   hidden_size = 200
   max_epoch = 4
-  max_max_epoch = 13
+#  max_max_epoch = 13
+  max_max_epoch = FLAGS.FLAGS.total_epochs
   keep_prob = 1.0
   lr_decay = 0.5
   batch_size = 20
@@ -374,7 +377,8 @@ class MediumConfig(object):
   num_steps = 35
   hidden_size = 650
   max_epoch = 6
-  max_max_epoch = 39
+#  max_max_epoch = 39
+  max_max_epoch = FLAGS.FLAGS.total_epochs
   keep_prob = 0.5
   lr_decay = 0.8
   batch_size = 20
@@ -394,7 +398,8 @@ class LargeConfig(object):
   num_steps = 35
   hidden_size = 1500
   max_epoch = 14
-  max_max_epoch = 55
+#  max_max_epoch = 55
+  max_max_epoch = FLAGS.FLAGS.total_epochs
   keep_prob = 0.35
   lr_decay = 1 / 1.15
   batch_size = 20
@@ -414,7 +419,8 @@ class CharLargeConfig(object):
   num_steps = 100
   hidden_size = 512
   max_epoch = 14
-  max_max_epoch = 255
+#  max_max_epoch = 255
+  max_max_epoch = FLAGS.FLAGS.total_epochs
   keep_prob = 0.5
   lr_decay = 1 / 1.15
   #batch_size = 64
@@ -433,7 +439,8 @@ class CharLargeConfig1(object):
   num_steps = 128
   hidden_size = 512
   max_epoch = 14
-  max_max_epoch = 255
+#  max_max_epoch = 255
+  max_max_epoch = FLAGS.FLAGS.total_epochs  
   keep_prob = 0.5
   lr_decay = 1 / 1.15
   batch_size = 16
@@ -452,7 +459,8 @@ class CharSmallConfig(object):
   num_steps = 128
   hidden_size = 256
   max_epoch = 14
-  max_max_epoch = 155
+#  max_max_epoch = 155
+  max_max_epoch = FLAGS.FLAGS.total_epochs
   keep_prob = 0.5
   lr_decay = 1 / 1.15
   batch_size = 8
