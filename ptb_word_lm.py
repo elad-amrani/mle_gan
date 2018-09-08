@@ -61,6 +61,7 @@ import sys
 sys.stdout = sys.stderr
 import numpy as np
 import tensorflow as tf
+import os
 
 import reader
 
@@ -697,7 +698,6 @@ def main(_):
     with tf.name_scope("Test"):
       with tf.variable_scope("Model", initializer=initializer):
         mtestGen = Generator(is_training=False, config=eval_config, reuse=True, mode="LM")
-#        mtestGenGan = Generator(is_training=False, config=eval_config, reuse=True, mode="GAN")
         
     # Create GAN losses
     dLossReal = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.ones_like(mDesReal.logit),
@@ -743,30 +743,66 @@ def main(_):
       if FLAGS.sample_mode:
         
         # Load ngrams
-        with open("./data/ptb.test.txt") as f:
+        with open(os.path.join(FLAGS.data_path, FLAGS.file_prefix + ".test.txt")) as f:
             lines = f.readlines()   
         unigrams, bigrams, trigrams, quadgrams, quintagrams, sextagrams = get_grams(lines)
 
         while True:
           inpt = raw_input("Enter your sample prefix: ")
           cnt = int(raw_input("Sample size: "))
+
           if config.is_char_model:
             seed_for_sample = [c for c in inpt.replace(' ', '_')]
           else:
             seed_for_sample = inpt.split()
             
-          samples = str(inpt) + " " + str(pretty_print(do_sample(session, mtestGen, [word_to_id[word] for word in seed_for_sample], cnt), config.is_char_model, id_2_word))
-          print("Seed: %s" % pretty_print([word_to_id[x] for x in seed_for_sample], config.is_char_model, id_2_word))
-          print("Sample: %s" % samples)
+          tot_unigrams = 0.0
+          tot_bigrams = 0.0
+          tot_trigrams = 0.0
+          tot_quadgrams = 0.0
+          tot_quintagrams = 0.0
+          tot_sextagrams = 0.0
+          max_sum_ngrams = 0.0
+          best_ngrams_sentence = None
+            
+          N = 1000
           
-          samples_unigrams, samples_bigrams, samples_trigrams, samples_quadgrams, samples_quintagrams, samples_sextagrams = get_grams([samples])
+          for ii in range(N):
+              samples = str(inpt) + " " + str(pretty_print(do_sample(session, mtestGen, [word_to_id[word] for word in seed_for_sample], cnt), config.is_char_model, id_2_word))
+              samples_unigrams, samples_bigrams, samples_trigrams, samples_quadgrams, samples_quintagrams, samples_sextagrams = get_grams([samples])
+              
+              # Compute current score
+              cur_unigrms = percentage_real(samples_unigrams, unigrams)
+              cur_bigrms = percentage_real(samples_bigrams, bigrams)
+              cur_trigrms = percentage_real(samples_trigrams, trigrams)
+              cur_quadgrms = percentage_real(samples_quadgrams, quadgrams)
+              cur_quintagrms = percentage_real(samples_quintagrams, quintagrams)
+              cur_sextagrms = percentage_real(samples_sextagrams, sextagrams)
+              
+              # Add to total sum
+              tot_unigrams += cur_unigrms
+              tot_bigrams += cur_bigrms
+              tot_trigrams += cur_trigrms
+              tot_quadgrams += cur_quadgrms
+              tot_quintagrams += cur_quintagrms
+              tot_sextagrams += cur_sextagrms
+              
+              sum_ngrams = cur_unigrms + cur_bigrms + cur_trigrms + cur_quadgrms + cur_quintagrms + cur_sextagrms
+              
+              # Save sentence with max ngrams sum
+              if (sum_ngrams > max_sum_ngrams):
+                  max_sum_ngrams = sum_ngrams
+                  best_ngrams_sentence = samples
           
-          print ("unigrams %.3f" % percentage_real(samples_unigrams, unigrams))
-          print ("bigrams %.3f" % percentage_real(samples_bigrams, bigrams))
-          print ("trigrams %.3f" % percentage_real(samples_trigrams, trigrams))
-          print ("quadgrams %.3f" % percentage_real(samples_quadgrams, quadgrams))
-          print ("quintagrams %.3f" % percentage_real(samples_quintagrams, quintagrams))
-          print ("sextagrams %.3f" % percentage_real(samples_sextagrams, sextagrams))
+          print ("")
+          print ("Unigrams %.3f" % (tot_unigrams/N))
+          print ("Bigrams %.3f" % (tot_bigrams/N))
+          print ("Trigrams %.3f" % (tot_trigrams/N))
+          print ("Quadgrams %.3f" % (tot_quadgrams/N))
+          print ("Quintagrams %.3f" % (tot_quintagrams/N))
+          print ("Sextagrams %.3f" % (tot_sextagrams/N))
+          print ("")
+          print ("Max nGrams sum sentence: " + best_ngrams_sentence)
           
 
       for i in range(config.max_max_epoch):
