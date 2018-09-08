@@ -357,7 +357,7 @@ class SmallConfig(object):
   hidden_size = 200
   max_epoch = 4
 #  max_max_epoch = 13
-  max_max_epoch = FLAGS.FLAGS.total_epochs
+  max_max_epoch = FLAGS.total_epochs
   keep_prob = 1.0
   lr_decay = 0.5
   batch_size = 20
@@ -378,7 +378,7 @@ class MediumConfig(object):
   hidden_size = 650
   max_epoch = 6
 #  max_max_epoch = 39
-  max_max_epoch = FLAGS.FLAGS.total_epochs
+  max_max_epoch = FLAGS.total_epochs
   keep_prob = 0.5
   lr_decay = 0.8
   batch_size = 20
@@ -399,7 +399,7 @@ class LargeConfig(object):
   hidden_size = 1500
   max_epoch = 14
 #  max_max_epoch = 55
-  max_max_epoch = FLAGS.FLAGS.total_epochs
+  max_max_epoch = FLAGS.total_epochs
   keep_prob = 0.35
   lr_decay = 1 / 1.15
   batch_size = 20
@@ -420,7 +420,7 @@ class CharLargeConfig(object):
   hidden_size = 512
   max_epoch = 14
 #  max_max_epoch = 255
-  max_max_epoch = FLAGS.FLAGS.total_epochs
+  max_max_epoch = FLAGS.total_epochs
   keep_prob = 0.5
   lr_decay = 1 / 1.15
   #batch_size = 64
@@ -440,7 +440,7 @@ class CharLargeConfig1(object):
   hidden_size = 512
   max_epoch = 14
 #  max_max_epoch = 255
-  max_max_epoch = FLAGS.FLAGS.total_epochs  
+  max_max_epoch = FLAGS.total_epochs  
   keep_prob = 0.5
   lr_decay = 1 / 1.15
   batch_size = 16
@@ -460,7 +460,7 @@ class CharSmallConfig(object):
   hidden_size = 256
   max_epoch = 14
 #  max_max_epoch = 155
-  max_max_epoch = FLAGS.FLAGS.total_epochs
+  max_max_epoch = FLAGS.total_epochs
   keep_prob = 0.5
   lr_decay = 1 / 1.15
   batch_size = 8
