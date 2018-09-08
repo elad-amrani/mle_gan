@@ -83,16 +83,16 @@ flags.DEFINE_bool("train_gan", False,
                   "Train model in GAN mode")
 flags.DEFINE_bool("train_lm", False,
                   "Train model in LM mode")
-flags.DEFINE_bool("test_in_n", False,
-                  "Test % in N metric on the test dataset")
+flags.DEFINE_string("d_arch", "nn",
+                    "Discriminator architecture. nn / dnn / lstm.")
 flags.DEFINE_string("file_prefix", "ptb",
                   "will be looking for file_prefix.train.txt, file_prefix.test.txt and file_prefix.valid.txt in data_path")
 flags.DEFINE_string("seed_for_sample", "i am",
                   "supply seeding phrase here. it must only contain words from vocabluary")
 flags.DEFINE_integer('gan_steps', 10,
                      'Train discriminator / generator for gan_steps mini-batches before switching')
-flags.DEFINE_float('gan_lr', 1e-3,
-                     'GAN learning rate')
+flags.DEFINE_float('gan_lr', 1e-3, 
+                   'GAN learning rate')
 
 
 FLAGS = flags.FLAGS
@@ -215,7 +215,7 @@ class Generator(object):
     
         self._lm_op = optimizer.apply_gradients(
             zip(grads, tvars),
-            global_step=tf.contrib.framework.get_or_create_global_step())
+            global_step=tf.train.get_or_create_global_step())
     
         self._new_lr = tf.placeholder(
             tf.float32, shape=[], name="new_learning_rate")
@@ -264,7 +264,7 @@ class Generator(object):
 
 class Discriminator(object):
   """Discriminator."""
-  def __init__(self, is_training, config, probs = None, reuse = False):        
+  def __init__(self, is_training, config, probs = None, reuse = False, d_arch = "nn"):        
       with tf.variable_scope("Discriminator", reuse=reuse):
           
           self.batch_size = batch_size = config.batch_size
@@ -280,17 +280,62 @@ class Discriminator(object):
               if (probs is None):
                   inputs = tf.nn.embedding_lookup(embedding, self.ids)
               else:
-                  inputs = tf.matmul(probs, embedding)          
-          
-          # Flatten embeddings
-          flat = tf.reshape(inputs, [-1, size * num_steps])
-                      
-          # Fully connected layer
-          softmax_w = tf.get_variable("softmax_w", [size * num_steps, 1], dtype=data_type())
-          softmax_b = tf.get_variable("softmax_b", [1], dtype=data_type())
+                  inputs = tf.matmul(probs, embedding)
+                  
+          if (d_arch == "nn"):
+                        
+              # Flatten embeddings
+              flat = tf.reshape(inputs, [-1, size * num_steps])
+                          
+              # Fully connected layer
+              softmax_w = tf.get_variable("softmax_w", [size * num_steps, 1], dtype=data_type())
+              softmax_b = tf.get_variable("softmax_b", [1], dtype=data_type())
+                
+              # Classify
+              self._logit = tf.matmul(flat, softmax_w) + softmax_b
+              
+          elif (d_arch == "dnn"):
+              
+              # Flatten embeddings
+              flat = tf.reshape(inputs, [-1, size * num_steps])
+                          
+              # First layer
+              softmax_w1 = tf.get_variable("softmax_w1", [size * num_steps, 400], dtype=data_type())
+              softmax_b1 = tf.get_variable("softmax_b1", [400], dtype=data_type())
+              layer_1 = tf.matmul(flat, softmax_w1) + softmax_b1
+              layer_1 = tf.nn.relu(layer_1)
+              
+              # Second layer
+              softmax_w2 = tf.get_variable("softmax_w2", [400, 1], dtype=data_type())
+              softmax_b2 = tf.get_variable("softmax_b2", [1], dtype=data_type())
+                   
+              # Classify
+              self._logit = tf.matmul(layer_1, softmax_w2) + softmax_b2
+              
+          elif (d_arch == "lstm"):
+              
+              inputs = tf.reshape(inputs, [batch_size, num_steps, size])
+              
+              lstm_cell = tf.contrib.rnn.BasicLSTMCell(size, forget_bias=0.0, state_is_tuple=True)
+              cell = tf.contrib.rnn.MultiRNNCell([lstm_cell] * config.num_layers, state_is_tuple=True)
+              self._initial_state = cell.zero_state(batch_size, data_type())
+             
+              outputs = []
+              state = self._initial_state
+              with tf.variable_scope("RNN"):
+                  for time_step in range(num_steps):
+                      if time_step > 0: tf.get_variable_scope().reuse_variables()
+                      (cell_output, state) = cell(inputs[:, time_step, :], state)
+                      outputs.append(cell_output)
             
-          # Classify
-          self._logit = tf.matmul(flat, softmax_w) + softmax_b
+              # Extract last output
+              softmax_w = tf.get_variable("softmax_w", [size, vocab_size], dtype=data_type())
+              softmax_b = tf.get_variable("softmax_b", [vocab_size], dtype=data_type())
+              
+              #Classify
+              self._logit = tf.matmul(outputs[-1], softmax_w) + softmax_b
+
+              
           
   @property
   def logit(self):
@@ -685,8 +730,8 @@ def main(_):
       with tf.variable_scope("Model", initializer=initializer):
         mGenLM = Generator(is_training=True, config=config, reuse=False, mode="LM")
         mGenGAN = Generator(is_training=True, config=config, reuse=True, mode="GAN")
-        mDesReal = Discriminator(is_training=True, config=config, reuse = False)
-        mDesFake = Discriminator(is_training=True, config=config, probs=mGenGAN.probs, reuse = True)        
+        mDesReal = Discriminator(is_training=True, config=config, reuse = False, d_arch=FLAGS.d_arch)
+        mDesFake = Discriminator(is_training=True, config=config, probs=mGenGAN.probs, reuse = True, d_arch=FLAGS.d_arch)        
         tf.summary.scalar("Training Loss", mGenLM.lm_cost)
         tf.summary.scalar("Learning Rate", mGenLM.lr)
 
@@ -813,8 +858,9 @@ def main(_):
 
         lr_decay = config.lr_decay ** max(i - config.max_epoch, 0.0)
         mGenLM.assign_lr(session, config.learning_rate * lr_decay)
-        print("Epoch: %d Learning rate: %.3f" % (i + 1, session.run(mGenLM.lr)))
+        print("Epoch: %d" % (i + 1))
         if (FLAGS.train_lm and not FLAGS.train_gan):  
+            print("Learning rate: %.3f" % (session.run(mGenLM.lr)))
             train_perplexity = run_lm_epoch(session, 
                                             mGenLM, 
                                             train_data, 
