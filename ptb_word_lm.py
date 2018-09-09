@@ -90,7 +90,11 @@ flags.DEFINE_string("file_prefix", "ptb",
 flags.DEFINE_string("seed_for_sample", "i am",
                   "supply seeding phrase here. it must only contain words from vocabluary")
 flags.DEFINE_integer('gan_steps', 10,
-                     'Train discriminator / generator for gan_steps mini-batches before switching')
+                     'Train discriminator / generator for gan_steps mini-batches before switching (in dual mode)')
+flags.DEFINE_integer('d_steps', 10,
+                     'Train discriminator for d_steps mini-batches before training generator (in gan mode)')
+flags.DEFINE_integer('g_steps', 10,
+                     'Train generator for g_steps mini-batches after training discriminator (in gan mode)')
 flags.DEFINE_float('gan_lr', 1e-3, 
                    'GAN learning rate')
 flags.DEFINE_integer('total_epochs', 26,
@@ -857,66 +861,67 @@ def main(_):
           print ("")
           print ("Max nGrams sum sentence: " + best_ngrams_sentence)
           
-
-      for i in range(config.max_max_epoch):
-
-        print("Seed: %s" % pretty_print([word_to_id[x] for x in seed_for_sample], config.is_char_model, id_2_word))
-        print("Sample: %s" % pretty_print(do_sample(session, mtestGen, [word_to_id[word] for word in seed_for_sample],
-                                                    max(5 * (len(seed_for_sample) + 1), 10)), config.is_char_model, id_2_word))
-
-        lr_decay = config.lr_decay ** max(i - config.max_epoch, 0.0)
-        mGenLM.assign_lr(session, config.learning_rate * lr_decay)
-        print("Epoch: %d" % (i + 1))
-        if (FLAGS.train_lm and not FLAGS.train_gan):  
-            print("Learning rate: %.3f" % (session.run(mGenLM.lr)))
-            train_perplexity = run_lm_epoch(session, 
-                                            mGenLM, 
-                                            train_data, 
-                                            is_train=True, 
-                                            verbose=True)
-            print("Epoch: %d Train Perplexity: %.3f" % (i + 1, train_perplexity))
-        elif (FLAGS.train_gan and not FLAGS.train_lm):
-            dLosReal, dLosFake, dLos, gLos = run_gan_epoch(session, 
-                                                           mDesReal,
-                                                           train_data,
-                                                           config,
-                                                           dLossReal=dLossReal,
-                                                           dLossFake=dLossFake,
-                                                           dLoss=dLoss,
-                                                           gLoss=gLoss,
-                                                           dOpt=dOpt,
-                                                           gOpt=gOpt,
-                                                           is_train=True, 
-                                                           verbose=True)
-        elif (FLAGS.train_gan and FLAGS.train_lm):
-            dLosReal, dLosFake, dLos, gLos, train_perplexity = run_dual_epoch(session,
-                                                                              mDesReal,
-                                                                              mGenLM,
-                                                                              train_data,
-                                                                              config,
-                                                                              dLossReal=dLossReal,
-                                                                              dLossFake=dLossFake,
-                                                                              dLoss=dLoss,
-                                                                              gLoss=gLoss,
-                                                                              dOpt=dOpt,
-                                                                              gOpt=gOptDual,
-                                                                              epoch_num=i,
-                                                                              is_train=True,
-                                                                              verbose=True)
-            print("Epoch: %d Train Perplexity: %.3f" % (i + 1, train_perplexity))
-        valid_perplexity = run_lm_epoch(session, mvalidGen, valid_data)
-        print("Epoch: %d Valid Perplexity: %.3f" % (i + 1, valid_perplexity))
-        if valid_perplexity < old_valid_perplexity:
-          old_valid_perplexity = valid_perplexity
-          sv.saver.save(session, FLAGS.save_path, i)
-        elif valid_perplexity >= 1.3*old_valid_perplexity:
-          if len(sv.saver.last_checkpoints)>0:
-            sv.saver.restore(session, sv.saver.last_checkpoints[-1])
-          break
-        else:
-          if len(sv.saver.last_checkpoints)>0:
-            sv.saver.restore(session, sv.saver.last_checkpoints[-1])
-          lr_decay *=0.5
+      if (FLAGS.train_gan or FLAGS.train_lm):
+          for i in range(config.max_max_epoch):
+    
+            print("Seed: %s" % pretty_print([word_to_id[x] for x in seed_for_sample], config.is_char_model, id_2_word))
+            print("Sample: %s" % pretty_print(do_sample(session, mtestGen, [word_to_id[word] for word in seed_for_sample],
+                                                        max(5 * (len(seed_for_sample) + 1), 10)), config.is_char_model, id_2_word))
+    
+            lr_decay = config.lr_decay ** max(i - config.max_epoch, 0.0)
+            mGenLM.assign_lr(session, config.learning_rate * lr_decay)
+            if (FLAGS.train_lm and not FLAGS.train_gan):  
+                print("Epoch: %d Learning rate: %.3f" % ((i + 1), session.run(mGenLM.lr)))
+                train_perplexity = run_lm_epoch(session, 
+                                                mGenLM, 
+                                                train_data, 
+                                                is_train=True, 
+                                                verbose=True)
+                print("Epoch: %d Train Perplexity: %.3f" % (i + 1, train_perplexity))
+            elif (FLAGS.train_gan and not FLAGS.train_lm):
+                print("Epoch: %d" % ((i + 1)))
+                dLosReal, dLosFake, dLos, gLos = run_gan_epoch(session, 
+                                                               mDesReal,
+                                                               train_data,
+                                                               config,
+                                                               dLossReal=dLossReal,
+                                                               dLossFake=dLossFake,
+                                                               dLoss=dLoss,
+                                                               gLoss=gLoss,
+                                                               dOpt=dOpt,
+                                                               gOpt=gOpt,
+                                                               is_train=True, 
+                                                               verbose=True)
+            elif (FLAGS.train_gan and FLAGS.train_lm):
+                print("Epoch: %d" % ((i + 1)))
+                dLosReal, dLosFake, dLos, gLos, train_perplexity = run_dual_epoch(session,
+                                                                                  mDesReal,
+                                                                                  mGenLM,
+                                                                                  train_data,
+                                                                                  config,
+                                                                                  dLossReal=dLossReal,
+                                                                                  dLossFake=dLossFake,
+                                                                                  dLoss=dLoss,
+                                                                                  gLoss=gLoss,
+                                                                                  dOpt=dOpt,
+                                                                                  gOpt=gOptDual,
+                                                                                  epoch_num=i,
+                                                                                  is_train=True,
+                                                                                  verbose=True)
+                print("Epoch: %d Train Perplexity: %.3f" % (i + 1, train_perplexity))
+            valid_perplexity = run_lm_epoch(session, mvalidGen, valid_data)
+            print("Epoch: %d Valid Perplexity: %.3f" % (i + 1, valid_perplexity))
+            if valid_perplexity < old_valid_perplexity:
+              old_valid_perplexity = valid_perplexity
+              sv.saver.save(session, FLAGS.save_path, i)
+            elif valid_perplexity >= 1.3*old_valid_perplexity:
+              if len(sv.saver.last_checkpoints)>0:
+                sv.saver.restore(session, sv.saver.last_checkpoints[-1])
+              break
+            else:
+              if len(sv.saver.last_checkpoints)>0:
+                sv.saver.restore(session, sv.saver.last_checkpoints[-1])
+              lr_decay *=0.5
 
       test_perplexity = run_lm_epoch(session, mtestGen, test_data)
       print("Test Perplexity: %.3f" % test_perplexity)
