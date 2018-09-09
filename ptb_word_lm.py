@@ -97,6 +97,8 @@ flags.DEFINE_integer('g_steps', 10,
                      'Train generator for g_steps mini-batches after training discriminator (in gan mode)')
 flags.DEFINE_float('gan_lr', 1e-3, 
                    'GAN learning rate')
+flags.DEFINE_float('tau', 1e-1, 
+                   'Gumbel Softmax temperature')
 flags.DEFINE_integer('total_epochs', 26,
                      'The total number of epochs for training')
 
@@ -118,6 +120,7 @@ class Generator(object):
         self.num_steps = num_steps = config.num_steps
         size = config.hidden_size
         vocab_size = config.vocab_size
+        tau = config.tau
     
         self._input_data = tf.placeholder(tf.int32, [batch_size, num_steps])
         self._targets = tf.placeholder(tf.int32, [batch_size, num_steps])
@@ -156,6 +159,7 @@ class Generator(object):
         self._logits = []
         self._soft_embed = []
         self._probs = []
+        self._gumbels_softmax = []
         
         softmax_w = tf.get_variable(
             "softmax_w", [size, vocab_size], dtype=data_type())
@@ -182,6 +186,12 @@ class Generator(object):
                 prob = tf.nn.softmax(logit)
                 self._probs.append(prob)
                 
+                # Gumbel softmax trick
+                uniform = tf.random_uniform([batch_size, vocab_size], minval=0, maxval=1)
+                gumbel = -tf.log(-tf.log(uniform))
+                gumbel_softmax = tf.nn.softmax((1.0 / tau) * (gumbel + logit))
+                self._gumbels_softmax.append(gumbel_softmax)
+                
                 # "Soft" embedding
                 soft_embedding = tf.matmul(prob, embedding)
                 self._soft_embed.append(soft_embedding)
@@ -189,6 +199,7 @@ class Generator(object):
         # Reshape
         self._logits = tf.reshape(tf.concat(axis=1, values=self._logits), [-1, vocab_size])
         self._probs = tf.reshape(tf.concat(axis=1, values=self._probs), [-1, vocab_size])
+        self._gumbels_softmax = tf.reshape(tf.concat(axis=1, values=self._gumbels_softmax), [-1, vocab_size])
         
         # During inference sample output from probability vector
         self.sample = tf.multinomial(self._logits, 1)
@@ -266,6 +277,10 @@ class Generator(object):
   @property
   def probs(self):
     return self._probs
+
+  @property
+  def gumbels_softmax(self):
+    return self._gumbels_softmax
 
 
 class Discriminator(object):
@@ -368,6 +383,7 @@ class SmallConfig(object):
   vocab_size = 10000
   noise_var = 1
   gan_learning_rate = FLAGS.gan_lr
+  tau = FLAGS.tau
 
 
 class MediumConfig(object):
@@ -389,6 +405,7 @@ class MediumConfig(object):
   vocab_size = 10000
   noise_var = 1
   gan_learning_rate = FLAGS.gan_lr
+  tau = FLAGS.tau
 
 
 class LargeConfig(object):
@@ -410,6 +427,7 @@ class LargeConfig(object):
   vocab_size = 10000
   noise_var = 1
   gan_learning_rate = FLAGS.gan_lr
+  tau = FLAGS.tau
 
 
 class CharLargeConfig(object):
@@ -743,7 +761,7 @@ def main(_):
         mGenLM = Generator(is_training=True, config=config, reuse=False, mode="LM")
         mGenGAN = Generator(is_training=True, config=config, reuse=True, mode="GAN")
         mDesReal = Discriminator(is_training=True, config=config, reuse = False, d_arch=FLAGS.d_arch)
-        mDesFake = Discriminator(is_training=True, config=config, probs=mGenGAN.probs, reuse = True, d_arch=FLAGS.d_arch)        
+        mDesFake = Discriminator(is_training=True, config=config, probs=mGenGAN.gumbels_softmax, reuse = True, d_arch=FLAGS.d_arch)        
         tf.summary.scalar("Training Loss", mGenLM.lm_cost)
         tf.summary.scalar("Learning Rate", mGenLM.lr)
 
