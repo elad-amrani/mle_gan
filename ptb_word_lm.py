@@ -83,16 +83,22 @@ flags.DEFINE_bool("train_gan", False,
                   "Train model in GAN mode")
 flags.DEFINE_bool("train_lm", False,
                   "Train model in LM mode")
-flags.DEFINE_bool("test_in_n", False,
-                  "Test % in N metric on the test dataset")
+flags.DEFINE_string("d_arch", "nn",
+                    "Discriminator architecture. nn / dnn / lstm.")
 flags.DEFINE_string("file_prefix", "ptb",
                   "will be looking for file_prefix.train.txt, file_prefix.test.txt and file_prefix.valid.txt in data_path")
 flags.DEFINE_string("seed_for_sample", "i am",
                   "supply seeding phrase here. it must only contain words from vocabluary")
 flags.DEFINE_integer('gan_steps', 10,
-                     'Train discriminator / generator for gan_steps mini-batches before switching')
-flags.DEFINE_float('gan_lr', 1e-3,
-                     'GAN learning rate')
+                     'Train discriminator / generator for gan_steps mini-batches before switching (in dual mode)')
+flags.DEFINE_integer('d_steps', 10,
+                     'Train discriminator for d_steps mini-batches before training generator (in gan mode)')
+flags.DEFINE_integer('g_steps', 10,
+                     'Train generator for g_steps mini-batches after training discriminator (in gan mode)')
+flags.DEFINE_float('gan_lr', 1e-3, 
+                   'GAN learning rate')
+flags.DEFINE_integer('total_epochs', 26,
+                     'The total number of epochs for training')
 
 
 FLAGS = flags.FLAGS
@@ -215,7 +221,7 @@ class Generator(object):
     
         self._lm_op = optimizer.apply_gradients(
             zip(grads, tvars),
-            global_step=tf.contrib.framework.get_or_create_global_step())
+            global_step=tf.train.get_or_create_global_step())
     
         self._new_lr = tf.placeholder(
             tf.float32, shape=[], name="new_learning_rate")
@@ -264,7 +270,7 @@ class Generator(object):
 
 class Discriminator(object):
   """Discriminator."""
-  def __init__(self, is_training, config, probs = None, reuse = False):        
+  def __init__(self, is_training, config, probs = None, reuse = False, d_arch = "nn"):        
       with tf.variable_scope("Discriminator", reuse=reuse):
           
           self.batch_size = batch_size = config.batch_size
@@ -280,17 +286,62 @@ class Discriminator(object):
               if (probs is None):
                   inputs = tf.nn.embedding_lookup(embedding, self.ids)
               else:
-                  inputs = tf.matmul(probs, embedding)          
-          
-          # Flatten embeddings
-          flat = tf.reshape(inputs, [-1, size * num_steps])
-                      
-          # Fully connected layer
-          softmax_w = tf.get_variable("softmax_w", [size * num_steps, 1], dtype=data_type())
-          softmax_b = tf.get_variable("softmax_b", [1], dtype=data_type())
+                  inputs = tf.matmul(probs, embedding)
+                  
+          if (d_arch == "nn"):
+                        
+              # Flatten embeddings
+              flat = tf.reshape(inputs, [-1, size * num_steps])
+                          
+              # Fully connected layer
+              softmax_w = tf.get_variable("softmax_w", [size * num_steps, 1], dtype=data_type())
+              softmax_b = tf.get_variable("softmax_b", [1], dtype=data_type())
+                
+              # Classify
+              self._logit = tf.matmul(flat, softmax_w) + softmax_b
+              
+          elif (d_arch == "dnn"):
+              
+              # Flatten embeddings
+              flat = tf.reshape(inputs, [-1, size * num_steps])
+                          
+              # First layer
+              softmax_w1 = tf.get_variable("softmax_w1", [size * num_steps, 400], dtype=data_type())
+              softmax_b1 = tf.get_variable("softmax_b1", [400], dtype=data_type())
+              layer_1 = tf.matmul(flat, softmax_w1) + softmax_b1
+              layer_1 = tf.nn.relu(layer_1)
+              
+              # Second layer
+              softmax_w2 = tf.get_variable("softmax_w2", [400, 1], dtype=data_type())
+              softmax_b2 = tf.get_variable("softmax_b2", [1], dtype=data_type())
+                   
+              # Classify
+              self._logit = tf.matmul(layer_1, softmax_w2) + softmax_b2
+              
+          elif (d_arch == "lstm"):
+              
+              inputs = tf.reshape(inputs, [batch_size, num_steps, size])
+              
+              lstm_cell = tf.contrib.rnn.BasicLSTMCell(size, forget_bias=0.0, state_is_tuple=True)
+              cell = tf.contrib.rnn.MultiRNNCell([lstm_cell] * config.num_layers, state_is_tuple=True)
+              self._initial_state = cell.zero_state(batch_size, data_type())
+             
+              outputs = []
+              state = self._initial_state
+              with tf.variable_scope("RNN"):
+                  for time_step in range(num_steps):
+                      if time_step > 0: tf.get_variable_scope().reuse_variables()
+                      (cell_output, state) = cell(inputs[:, time_step, :], state)
+                      outputs.append(cell_output)
             
-          # Classify
-          self._logit = tf.matmul(flat, softmax_w) + softmax_b
+              # Extract last output
+              softmax_w = tf.get_variable("softmax_w", [size, vocab_size], dtype=data_type())
+              softmax_b = tf.get_variable("softmax_b", [vocab_size], dtype=data_type())
+              
+              #Classify
+              self._logit = tf.matmul(outputs[-1], softmax_w) + softmax_b
+
+              
           
   @property
   def logit(self):
@@ -309,7 +360,8 @@ class SmallConfig(object):
   num_steps = 20
   hidden_size = 200
   max_epoch = 4
-  max_max_epoch = 13
+#  max_max_epoch = 13
+  max_max_epoch = FLAGS.total_epochs
   keep_prob = 1.0
   lr_decay = 0.5
   batch_size = 20
@@ -329,7 +381,8 @@ class MediumConfig(object):
   num_steps = 35
   hidden_size = 650
   max_epoch = 6
-  max_max_epoch = 39
+#  max_max_epoch = 39
+  max_max_epoch = FLAGS.total_epochs
   keep_prob = 0.5
   lr_decay = 0.8
   batch_size = 20
@@ -349,7 +402,8 @@ class LargeConfig(object):
   num_steps = 35
   hidden_size = 1500
   max_epoch = 14
-  max_max_epoch = 55
+#  max_max_epoch = 55
+  max_max_epoch = FLAGS.total_epochs
   keep_prob = 0.35
   lr_decay = 1 / 1.15
   batch_size = 20
@@ -369,7 +423,8 @@ class CharLargeConfig(object):
   num_steps = 100
   hidden_size = 512
   max_epoch = 14
-  max_max_epoch = 255
+#  max_max_epoch = 255
+  max_max_epoch = FLAGS.total_epochs
   keep_prob = 0.5
   lr_decay = 1 / 1.15
   #batch_size = 64
@@ -388,7 +443,8 @@ class CharLargeConfig1(object):
   num_steps = 128
   hidden_size = 512
   max_epoch = 14
-  max_max_epoch = 255
+#  max_max_epoch = 255
+  max_max_epoch = FLAGS.total_epochs  
   keep_prob = 0.5
   lr_decay = 1 / 1.15
   batch_size = 16
@@ -407,7 +463,8 @@ class CharSmallConfig(object):
   num_steps = 128
   hidden_size = 256
   max_epoch = 14
-  max_max_epoch = 155
+#  max_max_epoch = 155
+  max_max_epoch = FLAGS.total_epochs
   keep_prob = 0.5
   lr_decay = 1 / 1.15
   batch_size = 8
@@ -685,8 +742,8 @@ def main(_):
       with tf.variable_scope("Model", initializer=initializer):
         mGenLM = Generator(is_training=True, config=config, reuse=False, mode="LM")
         mGenGAN = Generator(is_training=True, config=config, reuse=True, mode="GAN")
-        mDesReal = Discriminator(is_training=True, config=config, reuse = False)
-        mDesFake = Discriminator(is_training=True, config=config, probs=mGenGAN.probs, reuse = True)        
+        mDesReal = Discriminator(is_training=True, config=config, reuse = False, d_arch=FLAGS.d_arch)
+        mDesFake = Discriminator(is_training=True, config=config, probs=mGenGAN.probs, reuse = True, d_arch=FLAGS.d_arch)        
         tf.summary.scalar("Training Loss", mGenLM.lm_cost)
         tf.summary.scalar("Learning Rate", mGenLM.lr)
 
@@ -804,65 +861,67 @@ def main(_):
           print ("")
           print ("Max nGrams sum sentence: " + best_ngrams_sentence)
           
-
-      for i in range(config.max_max_epoch):
-
-        print("Seed: %s" % pretty_print([word_to_id[x] for x in seed_for_sample], config.is_char_model, id_2_word))
-        print("Sample: %s" % pretty_print(do_sample(session, mtestGen, [word_to_id[word] for word in seed_for_sample],
-                                                    max(5 * (len(seed_for_sample) + 1), 10)), config.is_char_model, id_2_word))
-
-        lr_decay = config.lr_decay ** max(i - config.max_epoch, 0.0)
-        mGenLM.assign_lr(session, config.learning_rate * lr_decay)
-        print("Epoch: %d Learning rate: %.3f" % (i + 1, session.run(mGenLM.lr)))
-        if (FLAGS.train_lm and not FLAGS.train_gan):  
-            train_perplexity = run_lm_epoch(session, 
-                                            mGenLM, 
-                                            train_data, 
-                                            is_train=True, 
-                                            verbose=True)
-            print("Epoch: %d Train Perplexity: %.3f" % (i + 1, train_perplexity))
-        elif (FLAGS.train_gan and not FLAGS.train_lm):
-            dLosReal, dLosFake, dLos, gLos = run_gan_epoch(session, 
-                                                           mDesReal,
-                                                           train_data,
-                                                           config,
-                                                           dLossReal=dLossReal,
-                                                           dLossFake=dLossFake,
-                                                           dLoss=dLoss,
-                                                           gLoss=gLoss,
-                                                           dOpt=dOpt,
-                                                           gOpt=gOpt,
-                                                           is_train=True, 
-                                                           verbose=True)
-        elif (FLAGS.train_gan and FLAGS.train_lm):
-            dLosReal, dLosFake, dLos, gLos, train_perplexity = run_dual_epoch(session,
-                                                                              mDesReal,
-                                                                              mGenLM,
-                                                                              train_data,
-                                                                              config,
-                                                                              dLossReal=dLossReal,
-                                                                              dLossFake=dLossFake,
-                                                                              dLoss=dLoss,
-                                                                              gLoss=gLossDual,
-                                                                              dOpt=dOpt,
-                                                                              gOpt=gOptDual,
-                                                                              epoch_num=i,
-                                                                              is_train=True,
-                                                                              verbose=True)
-            print("Epoch: %d Train Perplexity: %.3f" % (i + 1, train_perplexity))
-        valid_perplexity = run_lm_epoch(session, mvalidGen, valid_data)
-        print("Epoch: %d Valid Perplexity: %.3f" % (i + 1, valid_perplexity))
-        if valid_perplexity < old_valid_perplexity:
-          old_valid_perplexity = valid_perplexity
-          sv.saver.save(session, FLAGS.save_path, i)
-        elif valid_perplexity >= 1.3*old_valid_perplexity:
-          if len(sv.saver.last_checkpoints)>0:
-            sv.saver.restore(session, sv.saver.last_checkpoints[-1])
-          break
-        else:
-          if len(sv.saver.last_checkpoints)>0:
-            sv.saver.restore(session, sv.saver.last_checkpoints[-1])
-          lr_decay *=0.5
+      if (FLAGS.train_gan or FLAGS.train_lm):
+          for i in range(config.max_max_epoch):
+    
+            print("Seed: %s" % pretty_print([word_to_id[x] for x in seed_for_sample], config.is_char_model, id_2_word))
+            print("Sample: %s" % pretty_print(do_sample(session, mtestGen, [word_to_id[word] for word in seed_for_sample],
+                                                        max(5 * (len(seed_for_sample) + 1), 10)), config.is_char_model, id_2_word))
+    
+            lr_decay = config.lr_decay ** max(i - config.max_epoch, 0.0)
+            mGenLM.assign_lr(session, config.learning_rate * lr_decay)
+            if (FLAGS.train_lm and not FLAGS.train_gan):  
+                print("Epoch: %d Learning rate: %.3f" % ((i + 1), session.run(mGenLM.lr)))
+                train_perplexity = run_lm_epoch(session, 
+                                                mGenLM, 
+                                                train_data, 
+                                                is_train=True, 
+                                                verbose=True)
+                print("Epoch: %d Train Perplexity: %.3f" % (i + 1, train_perplexity))
+            elif (FLAGS.train_gan and not FLAGS.train_lm):
+                print("Epoch: %d" % ((i + 1)))
+                dLosReal, dLosFake, dLos, gLos = run_gan_epoch(session, 
+                                                               mDesReal,
+                                                               train_data,
+                                                               config,
+                                                               dLossReal=dLossReal,
+                                                               dLossFake=dLossFake,
+                                                               dLoss=dLoss,
+                                                               gLoss=gLoss,
+                                                               dOpt=dOpt,
+                                                               gOpt=gOpt,
+                                                               is_train=True, 
+                                                               verbose=True)
+            elif (FLAGS.train_gan and FLAGS.train_lm):
+                print("Epoch: %d" % ((i + 1)))
+                dLosReal, dLosFake, dLos, gLos, train_perplexity = run_dual_epoch(session,
+                                                                                  mDesReal,
+                                                                                  mGenLM,
+                                                                                  train_data,
+                                                                                  config,
+                                                                                  dLossReal=dLossReal,
+                                                                                  dLossFake=dLossFake,
+                                                                                  dLoss=dLoss,
+                                                                                  gLoss=gLoss,
+                                                                                  dOpt=dOpt,
+                                                                                  gOpt=gOptDual,
+                                                                                  epoch_num=i,
+                                                                                  is_train=True,
+                                                                                  verbose=True)
+                print("Epoch: %d Train Perplexity: %.3f" % (i + 1, train_perplexity))
+            valid_perplexity = run_lm_epoch(session, mvalidGen, valid_data)
+            print("Epoch: %d Valid Perplexity: %.3f" % (i + 1, valid_perplexity))
+            if valid_perplexity < old_valid_perplexity:
+              old_valid_perplexity = valid_perplexity
+              sv.saver.save(session, FLAGS.save_path, i)
+            elif valid_perplexity >= 1.3*old_valid_perplexity:
+              if len(sv.saver.last_checkpoints)>0:
+                sv.saver.restore(session, sv.saver.last_checkpoints[-1])
+              break
+            else:
+              if len(sv.saver.last_checkpoints)>0:
+                sv.saver.restore(session, sv.saver.last_checkpoints[-1])
+              lr_decay *=0.5
 
       test_perplexity = run_lm_epoch(session, mtestGen, test_data)
       print("Test Perplexity: %.3f" % test_perplexity)
