@@ -91,6 +91,8 @@ flags.DEFINE_string("seed_for_sample", "i am",
                   "supply seeding phrase here. it must only contain words from vocabluary")
 flags.DEFINE_integer('gan_steps', 10,
                      'Train discriminator / generator for gan_steps mini-batches before switching (in dual mode)')
+flags.DEFINE_integer('g_scaler', 1,
+                     'For dual mode only: Scale gLoss by g_scaler')
 flags.DEFINE_integer('d_steps', 10,
                      'Train discriminator for d_steps mini-batches before training generator (in gan mode)')
 flags.DEFINE_integer('g_steps', 10,
@@ -783,7 +785,7 @@ def main(_):
     gLoss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.ones_like(mDesFake.logit),
                                                                    logits=mDesFake.logit), name="gLoss")
 
-    gLossDual = mGenLM.lm_cost + gLoss
+    gLossDual = mGenLM.lm_cost + FLAGS.g_scaler * gLoss
     
     # Get trainable vars for discriminator and generator
     tVars = tf.trainable_variables()
