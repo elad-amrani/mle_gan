@@ -99,8 +99,12 @@ flags.DEFINE_integer('d_steps', 10,
                      'Train discriminator for d_steps mini-batches before training generator (in gan mode)')
 flags.DEFINE_integer('g_steps', 10,
                      'Train generator for g_steps mini-batches after training discriminator (in gan mode)')
-flags.DEFINE_float('gan_lr', 1e-3, 
-                   'GAN learning rate')
+flags.DEFINE_float('lm_lr', 1e-3, 
+                   'LM loss learning rate (only in dual mode)')
+flags.DEFINE_float('g_lr', 1e-3, 
+                   'GAN generator loss learning rate')
+flags.DEFINE_float('d_lr', 1e-3, 
+                   'GAN discriminator loss learning rate')
 flags.DEFINE_float('tau', 1e-1, 
                    'Gumbel Softmax temperature')
 flags.DEFINE_integer('total_epochs', 26,
@@ -397,7 +401,6 @@ class SmallConfig(object):
   batch_size = 20
   vocab_size = 10000
   noise_var = 1
-  gan_learning_rate = FLAGS.gan_lr
   tau = FLAGS.tau
 
 
@@ -419,7 +422,6 @@ class MediumConfig(object):
   batch_size = 20
   vocab_size = 10000
   noise_var = 1
-  gan_learning_rate = FLAGS.gan_lr
   tau = FLAGS.tau
 
 
@@ -441,7 +443,6 @@ class LargeConfig(object):
   batch_size = 20
   vocab_size = 10000
   noise_var = 1
-  gan_learning_rate = FLAGS.gan_lr
   tau = FLAGS.tau
 
 
@@ -812,15 +813,17 @@ def main(_):
                                            config.max_grad_norm)
     
     # Create optimizers
-    optimizer = tf.train.AdamOptimizer(learning_rate=config.gan_learning_rate)
+    lmOptimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.lm_lr)
+    gOptimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.g_lr)
+    dOptimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.d_lr)
     
-    gLossOpt = optimizer.apply_gradients(zip(gLossGrads, gVars),
-                                     global_step=tf.contrib.framework.get_or_create_global_step())
-    gPerplexityOpt = optimizer.apply_gradients(zip(gPerplexityGrads, gVars),
-                                     global_step=tf.contrib.framework.get_or_create_global_step())
+    gLossOpt = gOptimizer.apply_gradients(zip(gLossGrads, gVars),
+                                          global_step=tf.contrib.framework.get_or_create_global_step())
+    gPerplexityOpt = lmOptimizer.apply_gradients(zip(gPerplexityGrads, gVars),
+                                                 global_step=tf.contrib.framework.get_or_create_global_step())
     gOptDual = tf.group(gPerplexityOpt, gLossOpt)
-    dOpt = optimizer.apply_gradients(zip(dLossGrads, dVars),
-                                     global_step=tf.contrib.framework.get_or_create_global_step())
+    dOpt = dOptimizer.apply_gradients(zip(dLossGrads, dVars),
+                                      global_step=tf.contrib.framework.get_or_create_global_step())
 
     saver = tf.train.Saver(name='saver', write_version=tf.train.SaverDef.V2)
     sv = tf.train.Supervisor(logdir=FLAGS.save_path, save_model_secs=0, save_summaries_secs=0, saver=saver)
