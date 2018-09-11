@@ -83,6 +83,10 @@ flags.DEFINE_bool("train_gan", False,
                   "Train model in GAN mode")
 flags.DEFINE_bool("train_lm", False,
                   "Train model in LM mode")
+flags.DEFINE_bool("save_embeddings", False,
+                  "Save Generator's embeddings")
+flags.DEFINE_bool("load_embeddings", False,
+                  "Initialize Generator and Discriminator with pre-trained embeddings")
 flags.DEFINE_string("d_arch", "nn",
                     "Discriminator architecture. nn / dnn / lstm.")
 flags.DEFINE_string("file_prefix", "ptb",
@@ -141,9 +145,12 @@ class Generator(object):
     
     
         with tf.device("/cpu:0"):
-          embedding = tf.get_variable(
-              "embedding", [vocab_size, size], dtype=data_type())
-          inputs = tf.nn.embedding_lookup(embedding, self._input_data)
+          if (FLAGS.load_embeddings):
+              embeddings = np.load(os.path.join(FLAGS.data_path, FLAGS.file_prefix + "_embeddings.npy"))
+              self._embedding = tf.get_variable("embedding", dtype=data_type(),initializer=embeddings)
+          else:
+              self._embedding = tf.get_variable("embedding", [vocab_size, size], dtype=data_type())
+          inputs = tf.nn.embedding_lookup(self._embedding, self._input_data)
     
         if is_training and config.keep_prob < 1:
           inputs = tf.nn.dropout(inputs, config.keep_prob)
@@ -195,7 +202,7 @@ class Generator(object):
                 self._gumbels_softmax.append(gumbel_softmax)
                 
                 # "Soft" embedding
-                soft_embedding = tf.matmul(prob, embedding)
+                soft_embedding = tf.matmul(prob, self._embedding)
                 self._soft_embed.append(soft_embedding)
         
         # Reshape
@@ -284,6 +291,10 @@ class Generator(object):
   def gumbels_softmax(self):
     return self._gumbels_softmax
 
+  @property
+  def embedding(self):
+    return self._embedding
+
 
 class Discriminator(object):
   """Discriminator."""
@@ -298,12 +309,16 @@ class Discriminator(object):
           self.ids = tf.placeholder(tf.int32, [batch_size, num_steps])             
           
           with tf.device("/cpu:0"):
-              embedding = tf.get_variable("embedding", [vocab_size, size], dtype=data_type())
+              if (FLAGS.load_embeddings):
+                  embeddings = np.load(os.path.join(FLAGS.data_path, FLAGS.file_prefix + "_embeddings.npy"))
+                  self._embedding = tf.get_variable("embedding", dtype=data_type(),initializer=embeddings)
+              else:
+                  self._embedding = tf.get_variable("embedding", [vocab_size, size], dtype=data_type())
               # Apply embeddings lookup for real data or during inference of generator
               if (probs is None):
-                  inputs = tf.nn.embedding_lookup(embedding, self.ids)
+                  inputs = tf.nn.embedding_lookup(self._embedding, self.ids)
               else:
-                  inputs = tf.matmul(probs, embedding)
+                  inputs = tf.matmul(probs, self._embedding)
                   
           if (d_arch == "nn"):
                         
@@ -890,7 +905,10 @@ def main(_):
     
             lr_decay = config.lr_decay ** max(i - config.max_epoch, 0.0)
             mGenLM.assign_lr(session, config.learning_rate * lr_decay)
-            if (FLAGS.train_lm and not FLAGS.train_gan):  
+            if (FLAGS.train_lm and not FLAGS.train_gan):
+                if (FLAGS.save_embeddings):
+                  np.save(os.path.join(FLAGS.data_path, FLAGS.file_prefix + "_embeddings"), 
+                          session.run(mGenLM.embedding))
                 print("Epoch: %d Learning rate: %.3f" % ((i + 1), session.run(mGenLM.lr)))
                 train_perplexity = run_lm_epoch(session, 
                                                 mGenLM, 
@@ -932,6 +950,9 @@ def main(_):
             valid_perplexity = run_lm_epoch(session, mvalidGen, valid_data)
             print("Epoch: %d Valid Perplexity: %.3f" % (i + 1, valid_perplexity))
             if valid_perplexity < old_valid_perplexity:
+              if (FLAGS.save_embeddings):
+                  np.save(os.path.join(FLAGS.data_path, FLAGS.file_prefix + "_embeddings"), 
+                          session.run(mGenLM.embedding))
               old_valid_perplexity = valid_perplexity
               sv.saver.save(session, FLAGS.save_path, i)
             elif valid_perplexity >= 1.3*old_valid_perplexity:
