@@ -906,9 +906,6 @@ def main(_):
             lr_decay = config.lr_decay ** max(i - config.max_epoch, 0.0)
             mGenLM.assign_lr(session, config.learning_rate * lr_decay)
             if (FLAGS.train_lm and not FLAGS.train_gan):
-                if (FLAGS.save_embeddings):
-                  np.save(os.path.join(FLAGS.data_path, FLAGS.file_prefix + "_embeddings"), 
-                          session.run(mGenLM.embedding))
                 print("Epoch: %d Learning rate: %.3f" % ((i + 1), session.run(mGenLM.lr)))
                 train_perplexity = run_lm_epoch(session, 
                                                 mGenLM, 
