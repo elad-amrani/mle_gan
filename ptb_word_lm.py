@@ -95,8 +95,6 @@ flags.DEFINE_string("seed_for_sample", "i am",
                   "supply seeding phrase here. it must only contain words from vocabluary")
 flags.DEFINE_integer('gan_steps', 10,
                      'Train discriminator / generator for gan_steps mini-batches before switching (in dual mode)')
-flags.DEFINE_integer('g_scalar', 1,
-                     'For dual mode only: Scale gLoss by g_scalar')
 flags.DEFINE_integer('d_steps', 10,
                      'Train discriminator for d_steps mini-batches before training generator (in gan mode)')
 flags.DEFINE_integer('g_steps', 10,
@@ -799,8 +797,6 @@ def main(_):
     dLoss = tf.add(dLossReal, dLossFake, name="dLoss")
     gLoss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.ones_like(mDesFake.logit),
                                                                    logits=mDesFake.logit), name="gLoss")
-
-    gLossDual = mGenLM.lm_cost + FLAGS.g_scalar * gLoss
     
     # Get trainable vars for discriminator and generator
     tVars = tf.trainable_variables()
@@ -812,17 +808,18 @@ def main(_):
                                            config.max_grad_norm)
     dLossGrads, _ = tf.clip_by_global_norm(tf.gradients(dLoss, dVars), 
                                            config.max_grad_norm)
-    gLossDualGrads, _ = tf.clip_by_global_norm(tf.gradients(gLossDual, gVars), 
-                                               config.max_grad_norm)
+    gPerplexityGrads, _ = tf.clip_by_global_norm(tf.gradients(mGenLM.lm_cost, gVars), 
+                                           config.max_grad_norm)
     
     # Create optimizers
     optimizer = tf.train.AdamOptimizer(learning_rate=config.gan_learning_rate)
     
-    gOpt = optimizer.apply_gradients(zip(gLossGrads, gVars),
+    gLossOpt = optimizer.apply_gradients(zip(gLossGrads, gVars),
                                      global_step=tf.contrib.framework.get_or_create_global_step())
+    gPerplexityOpt = optimizer.apply_gradients(zip(gPerplexityGrads, gVars),
+                                     global_step=tf.contrib.framework.get_or_create_global_step())
+    gOptDual = tf.group(gPerplexityOpt, gLossOpt)
     dOpt = optimizer.apply_gradients(zip(dLossGrads, dVars),
-                                     global_step=tf.contrib.framework.get_or_create_global_step())
-    gOptDual = optimizer.apply_gradients(zip(gLossDualGrads, gVars),
                                      global_step=tf.contrib.framework.get_or_create_global_step())
 
     saver = tf.train.Saver(name='saver', write_version=tf.train.SaverDef.V2)
@@ -856,6 +853,8 @@ def main(_):
           tot_sextagrams = 0.0
           max_sum_ngrams = 0.0
           best_ngrams_sentence = None
+          max_sextagrams = 0.0
+          best_sextagram_sentence = "< No sextagram sentence was generated >"
             
           N = 1000
           
@@ -885,16 +884,27 @@ def main(_):
               if (sum_ngrams > max_sum_ngrams):
                   max_sum_ngrams = sum_ngrams
                   best_ngrams_sentence = samples
+                  
+              # Save sentence with best sextagram score
+              if (cur_sextagrms > max_sextagrams):
+                  max_sextagrams = cur_sextagrms
+                  best_sextagram_sentence = samples
+              
+              # Print sentence every 10 iterations
+              if (ii % 10 == 0):
+                  print (samples + ". Sum nGrams: " + str(sum_ngrams))
           
           print ("")
+          print ("Averaging over " + str(N) + " iterations:")
+          print ("----------------------------------------")
           print ("Unigrams %.3f" % (tot_unigrams/N))
           print ("Bigrams %.3f" % (tot_bigrams/N))
           print ("Trigrams %.3f" % (tot_trigrams/N))
           print ("Quadgrams %.3f" % (tot_quadgrams/N))
           print ("Quintagrams %.3f" % (tot_quintagrams/N))
           print ("Sextagrams %.3f" % (tot_sextagrams/N))
-          print ("")
-          print ("Max nGrams sum sentence: " + best_ngrams_sentence)
+          print ("Best nGrams sum sentence: " + best_ngrams_sentence)
+          print ("Best sextagram sentence: " + best_sextagram_sentence)
           
       if (FLAGS.train_gan or FLAGS.train_lm):
           for i in range(config.max_max_epoch):
@@ -924,7 +934,7 @@ def main(_):
                                                                dLoss=dLoss,
                                                                gLoss=gLoss,
                                                                dOpt=dOpt,
-                                                               gOpt=gOpt,
+                                                               gOpt=gLossOpt,
                                                                is_train=True, 
                                                                verbose=True)
             elif (FLAGS.train_gan and FLAGS.train_lm):
