@@ -717,9 +717,9 @@ def run_dual_epoch(session, modelD, modelLM, data, config, dLossReal, dLossFake,
         gLMiters += modelLM.num_steps
 
         if verbose and step % (epoch_size // 10) == 10:
-            print("%.3f dLossReal: %.3f dLossFake: %.3f dLoss: %.3f gLoss: %.3f gPerplexity: %.3f speed: %.0f wps" %
-                  (step * 1.0 / epoch_size, dCostsReal / iters, dCostsFake / iters, dCosts / iters, gCosts / iters,
-                   np.exp(gLMcosts / gLMiters), iters * modelD.batch_size / (time.time() - start_time)))
+            print("step: %d/%d (%.3f) dLossReal: %.3f dLossFake: %.3f dLoss: %.3f gLoss: %.3f gPerplexity: %.3f speed: %.0f wps" %
+                  (step, epoch_size, step * 1.0 / epoch_size, dCostReal, dCostFake, dCost, gCost,
+                   np.exp(gLMCost / modelLM.num_steps), iters * modelD.batch_size / (time.time() - start_time)))
 
     return dCostsReal / iters, dCostsFake / iters, dCosts / iters, gCosts / iters, np.exp(gLMcosts / gLMiters)
 
@@ -940,6 +940,7 @@ def main(_):
                                                                gOpt=gLossOpt,
                                                                is_train=True, 
                                                                verbose=True)
+                print("Epoch: %d dLossReal: %.3f dLossFake: %.3f dLoss: %.3f gLoss: %.3f" % (i+1, dLosReal, dLosFake, dLos, gLos))
             elif (FLAGS.train_gan and FLAGS.train_lm):
                 print("Epoch: %d" % ((i + 1)))
                 dLosReal, dLosFake, dLos, gLos, train_perplexity = run_dual_epoch(session,
@@ -956,6 +957,7 @@ def main(_):
                                                                                   epoch_num=i,
                                                                                   is_train=True,
                                                                                   verbose=True)
+                print("Epoch: %d dLossReal: %.3f dLossFake: %.3f dLoss: %.3f gLoss: %.3f" % (i+1, dLosReal, dLosFake, dLos, gLos))
                 print("Epoch: %d Train Perplexity: %.3f" % (i + 1, train_perplexity))
             valid_perplexity = run_lm_epoch(session, mvalidGen, valid_data)
             print("Epoch: %d Valid Perplexity: %.3f" % (i + 1, valid_perplexity))
