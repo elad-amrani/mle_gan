@@ -1,1 +1,1 @@
-# gan_lm
+# mle_gan
