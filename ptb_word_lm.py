@@ -62,6 +62,9 @@ sys.stdout = sys.stderr
 import numpy as np
 import tensorflow as tf
 import os
+import csv
+from nltk.translate.bleu_score import corpus_bleu
+from nltk.translate.bleu_score import SmoothingFunction
 
 import reader
 
@@ -83,6 +86,10 @@ flags.DEFINE_bool("train_gan", False,
                   "Train model in GAN mode")
 flags.DEFINE_bool("train_lm", False,
                   "Train model in LM mode")
+flags.DEFINE_bool("save_embeddings", False,
+                  "Save Generator's embeddings")
+flags.DEFINE_bool("load_embeddings", False,
+                  "Initialize Generator and Discriminator with pre-trained embeddings")
 flags.DEFINE_string("d_arch", "nn",
                     "Discriminator architecture. nn / dnn / lstm.")
 flags.DEFINE_string("file_prefix", "ptb",
@@ -95,8 +102,14 @@ flags.DEFINE_integer('d_steps', 10,
                      'Train discriminator for d_steps mini-batches before training generator (in gan mode)')
 flags.DEFINE_integer('g_steps', 10,
                      'Train generator for g_steps mini-batches after training discriminator (in gan mode)')
-flags.DEFINE_float('gan_lr', 1e-3, 
-                   'GAN learning rate')
+flags.DEFINE_float('lm_lr', 1e-3, 
+                   'LM loss learning rate (only in dual mode)')
+flags.DEFINE_float('g_lr', 1e-3, 
+                   'GAN generator loss learning rate')
+flags.DEFINE_float('d_lr', 1e-3, 
+                   'GAN discriminator loss learning rate')
+flags.DEFINE_float('tau', 1e-1, 
+                   'Gumbel Softmax temperature')
 flags.DEFINE_integer('total_epochs', 26,
                      'The total number of epochs for training')
 
@@ -118,6 +131,7 @@ class Generator(object):
         self.num_steps = num_steps = config.num_steps
         size = config.hidden_size
         vocab_size = config.vocab_size
+        tau = config.tau
     
         self._input_data = tf.placeholder(tf.int32, [batch_size, num_steps])
         self._targets = tf.placeholder(tf.int32, [batch_size, num_steps])
@@ -136,9 +150,12 @@ class Generator(object):
     
     
         with tf.device("/cpu:0"):
-          embedding = tf.get_variable(
-              "embedding", [vocab_size, size], dtype=data_type())
-          inputs = tf.nn.embedding_lookup(embedding, self._input_data)
+          if (FLAGS.load_embeddings):
+              embeddings = np.load(os.path.join(FLAGS.data_path, FLAGS.file_prefix + "_embeddings.npy"))
+              self._embedding = tf.get_variable("embedding", dtype=data_type(),initializer=embeddings)
+          else:
+              self._embedding = tf.get_variable("embedding", [vocab_size, size], dtype=data_type())
+          inputs = tf.nn.embedding_lookup(self._embedding, self._input_data)
     
         if is_training and config.keep_prob < 1:
           inputs = tf.nn.dropout(inputs, config.keep_prob)
@@ -156,6 +173,7 @@ class Generator(object):
         self._logits = []
         self._soft_embed = []
         self._probs = []
+        self._gumbels_softmax = []
         
         softmax_w = tf.get_variable(
             "softmax_w", [size, vocab_size], dtype=data_type())
@@ -182,13 +200,20 @@ class Generator(object):
                 prob = tf.nn.softmax(logit)
                 self._probs.append(prob)
                 
+                # Gumbel softmax trick
+                uniform = tf.random_uniform([batch_size, vocab_size], minval=0, maxval=1)
+                gumbel = -tf.log(-tf.log(uniform))
+                gumbel_softmax = tf.nn.softmax((1.0 / tau) * (gumbel + logit))
+                self._gumbels_softmax.append(gumbel_softmax)
+                
                 # "Soft" embedding
-                soft_embedding = tf.matmul(prob, embedding)
+                soft_embedding = tf.matmul(prob, self._embedding)
                 self._soft_embed.append(soft_embedding)
         
         # Reshape
         self._logits = tf.reshape(tf.concat(axis=1, values=self._logits), [-1, vocab_size])
         self._probs = tf.reshape(tf.concat(axis=1, values=self._probs), [-1, vocab_size])
+        self._gumbels_softmax = tf.reshape(tf.concat(axis=1, values=self._gumbels_softmax), [-1, vocab_size])
         
         # During inference sample output from probability vector
         self.sample = tf.multinomial(self._logits, 1)
@@ -267,6 +292,14 @@ class Generator(object):
   def probs(self):
     return self._probs
 
+  @property
+  def gumbels_softmax(self):
+    return self._gumbels_softmax
+
+  @property
+  def embedding(self):
+    return self._embedding
+
 
 class Discriminator(object):
   """Discriminator."""
@@ -281,12 +314,16 @@ class Discriminator(object):
           self.ids = tf.placeholder(tf.int32, [batch_size, num_steps])             
           
           with tf.device("/cpu:0"):
-              embedding = tf.get_variable("embedding", [vocab_size, size], dtype=data_type())
+              if (FLAGS.load_embeddings):
+                  embeddings = np.load(os.path.join(FLAGS.data_path, FLAGS.file_prefix + "_embeddings.npy"))
+                  self._embedding = tf.get_variable("embedding", dtype=data_type(),initializer=embeddings)
+              else:
+                  self._embedding = tf.get_variable("embedding", [vocab_size, size], dtype=data_type())
               # Apply embeddings lookup for real data or during inference of generator
               if (probs is None):
-                  inputs = tf.nn.embedding_lookup(embedding, self.ids)
+                  inputs = tf.nn.embedding_lookup(self._embedding, self.ids)
               else:
-                  inputs = tf.matmul(probs, embedding)
+                  inputs = tf.matmul(probs, self._embedding)
                   
           if (d_arch == "nn"):
                         
@@ -367,7 +404,7 @@ class SmallConfig(object):
   batch_size = 20
   vocab_size = 10000
   noise_var = 1
-  gan_learning_rate = FLAGS.gan_lr
+  tau = FLAGS.tau
 
 
 class MediumConfig(object):
@@ -388,7 +425,7 @@ class MediumConfig(object):
   batch_size = 20
   vocab_size = 10000
   noise_var = 1
-  gan_learning_rate = FLAGS.gan_lr
+  tau = FLAGS.tau
 
 
 class LargeConfig(object):
@@ -409,7 +446,7 @@ class LargeConfig(object):
   batch_size = 20
   vocab_size = 10000
   noise_var = 1
-  gan_learning_rate = FLAGS.gan_lr
+  tau = FLAGS.tau
 
 
 class CharLargeConfig(object):
@@ -530,7 +567,7 @@ def percentage_real(samples_grams, real_grams):
         if g in real_grams:
             grams_in_real += 1
     if len(samples_grams) > 0:
-        return grams_in_real * 1.0 / len(samples_grams)
+        return grams_in_real * 1.0 / len(samples_grams), grams_in_real
     return 0
 
 def do_sample(session, model, data, num_samples):
@@ -683,9 +720,9 @@ def run_dual_epoch(session, modelD, modelLM, data, config, dLossReal, dLossFake,
         gLMiters += modelLM.num_steps
 
         if verbose and step % (epoch_size // 10) == 10:
-            print("%.3f dLossReal: %.3f dLossFake: %.3f dLoss: %.3f gLoss: %.3f gPerplexity: %.3f speed: %.0f wps" %
-                  (step * 1.0 / epoch_size, dCostsReal / iters, dCostsFake / iters, dCosts / iters, gCosts / iters,
-                   np.exp(gLMcosts / gLMiters), iters * modelD.batch_size / (time.time() - start_time)))
+            print("step: %d/%d (%.3f) dLossReal: %.3f dLossFake: %.3f dLoss: %.3f gLoss: %.3f gPerplexity: %.3f speed: %.0f wps" %
+                  (step, epoch_size, step * 1.0 / epoch_size, dCostReal, dCostFake, dCost, gCost,
+                   np.exp(gLMCost / modelLM.num_steps), iters * modelD.batch_size / (time.time() - start_time)))
 
     return dCostsReal / iters, dCostsFake / iters, dCosts / iters, gCosts / iters, np.exp(gLMcosts / gLMiters)
 
@@ -743,7 +780,7 @@ def main(_):
         mGenLM = Generator(is_training=True, config=config, reuse=False, mode="LM")
         mGenGAN = Generator(is_training=True, config=config, reuse=True, mode="GAN")
         mDesReal = Discriminator(is_training=True, config=config, reuse = False, d_arch=FLAGS.d_arch)
-        mDesFake = Discriminator(is_training=True, config=config, probs=mGenGAN.probs, reuse = True, d_arch=FLAGS.d_arch)        
+        mDesFake = Discriminator(is_training=True, config=config, probs=mGenGAN.gumbels_softmax, reuse = True, d_arch=FLAGS.d_arch)        
         tf.summary.scalar("Training Loss", mGenLM.lm_cost)
         tf.summary.scalar("Learning Rate", mGenLM.lr)
 
@@ -764,8 +801,6 @@ def main(_):
     dLoss = tf.add(dLossReal, dLossFake, name="dLoss")
     gLoss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.ones_like(mDesFake.logit),
                                                                    logits=mDesFake.logit), name="gLoss")
-
-    gLossDual = mGenLM.lm_cost + gLoss
     
     # Get trainable vars for discriminator and generator
     tVars = tf.trainable_variables()
@@ -777,18 +812,21 @@ def main(_):
                                            config.max_grad_norm)
     dLossGrads, _ = tf.clip_by_global_norm(tf.gradients(dLoss, dVars), 
                                            config.max_grad_norm)
-    gLossDualGrads, _ = tf.clip_by_global_norm(tf.gradients(gLossDual, gVars), 
-                                               config.max_grad_norm)
+    gPerplexityGrads, _ = tf.clip_by_global_norm(tf.gradients(mGenLM.lm_cost, gVars), 
+                                           config.max_grad_norm)
     
     # Create optimizers
-    optimizer = tf.train.AdamOptimizer(learning_rate=config.gan_learning_rate)
+    lmOptimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.lm_lr)
+    gOptimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.g_lr)
+    dOptimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.d_lr)
     
-    gOpt = optimizer.apply_gradients(zip(gLossGrads, gVars),
-                                     global_step=tf.contrib.framework.get_or_create_global_step())
-    dOpt = optimizer.apply_gradients(zip(dLossGrads, dVars),
-                                     global_step=tf.contrib.framework.get_or_create_global_step())
-    gOptDual = optimizer.apply_gradients(zip(gLossDualGrads, gVars),
-                                     global_step=tf.contrib.framework.get_or_create_global_step())
+    gLossOpt = gOptimizer.apply_gradients(zip(gLossGrads, gVars),
+                                          global_step=tf.contrib.framework.get_or_create_global_step())
+    gPerplexityOpt = lmOptimizer.apply_gradients(zip(gPerplexityGrads, gVars),
+                                                 global_step=tf.contrib.framework.get_or_create_global_step())
+    gOptDual = tf.group(gPerplexityOpt, gLossOpt)
+    dOpt = dOptimizer.apply_gradients(zip(dLossGrads, dVars),
+                                      global_step=tf.contrib.framework.get_or_create_global_step())
 
     saver = tf.train.Saver(name='saver', write_version=tf.train.SaverDef.V2)
     sv = tf.train.Supervisor(logdir=FLAGS.save_path, save_model_secs=0, save_summaries_secs=0, saver=saver)
@@ -799,11 +837,20 @@ def main(_):
     with sv.managed_session() as session:
       if FLAGS.sample_mode:
         
+        testFile = os.path.join(FLAGS.data_path, FLAGS.file_prefix + ".test.txt")
+        
+        # Load references
+        references = []
+        with open(testFile) as inputfile:
+            for row in csv.reader(inputfile):
+                references.append((row[0] + "<eos>").decode("utf-8").split())
+        references = [references]
+                
         # Load ngrams
-        with open(os.path.join(FLAGS.data_path, FLAGS.file_prefix + ".test.txt")) as f:
+        with open(testFile) as f:
             lines = f.readlines()   
-        unigrams, bigrams, trigrams, quadgrams, quintagrams, sextagrams = get_grams(lines)
-
+        unigrams, bigrams, trigrams, quadgrams, quintagrams, sextagrams = get_grams(lines)       
+        
         while True:
           inpt = raw_input("Enter your sample prefix: ")
           cnt = int(raw_input("Sample size: "))
@@ -819,22 +866,41 @@ def main(_):
           tot_quadgrams = 0.0
           tot_quintagrams = 0.0
           tot_sextagrams = 0.0
-          max_sum_ngrams = 0.0
-          best_ngrams_sentence = None
+          tot_bleu1 = 0.0
+          tot_bleu2 = 0.0
+          tot_bleu3 = 0.0
+          tot_bleu4 = 0.0
+          all_unigrams = {}
+          all_bigrams = {}
+          all_trigrams = {}
+          all_quadgrams = {}
+          all_quintagrams = {}
+          all_sextagrams = {}
             
-          N = 1000
+          N = 100
           
           for ii in range(N):
               samples = str(inpt) + " " + str(pretty_print(do_sample(session, mtestGen, [word_to_id[word] for word in seed_for_sample], cnt), config.is_char_model, id_2_word))
               samples_unigrams, samples_bigrams, samples_trigrams, samples_quadgrams, samples_quintagrams, samples_sextagrams = get_grams([samples])
               
+              # Append ngrams to a single dict
+              all_unigrams.update(samples_unigrams)
+              all_bigrams.update(samples_bigrams)
+              all_trigrams.update(samples_trigrams)
+              all_quadgrams.update(samples_quadgrams)
+              all_quintagrams.update(samples_quintagrams)
+              all_sextagrams.update(samples_sextagrams)
+              
               # Compute current score
-              cur_unigrms = percentage_real(samples_unigrams, unigrams)
-              cur_bigrms = percentage_real(samples_bigrams, bigrams)
-              cur_trigrms = percentage_real(samples_trigrams, trigrams)
-              cur_quadgrms = percentage_real(samples_quadgrams, quadgrams)
-              cur_quintagrms = percentage_real(samples_quintagrams, quintagrams)
-              cur_sextagrms = percentage_real(samples_sextagrams, sextagrams)
+              cur_unigrms, _ = percentage_real(samples_unigrams, unigrams)
+              cur_bigrms, _ = percentage_real(samples_bigrams, bigrams)
+              cur_trigrms, _ = percentage_real(samples_trigrams, trigrams)
+              cur_quadgrms, _ = percentage_real(samples_quadgrams, quadgrams)
+              cur_quintagrms, _ = percentage_real(samples_quintagrams, quintagrams)
+              cur_sextagrms, _ = percentage_real(samples_sextagrams, sextagrams)
+              
+              # Current candidate
+              candidate = [samples.decode("utf-8").split()]
               
               # Add to total sum
               tot_unigrams += cur_unigrms
@@ -843,23 +909,44 @@ def main(_):
               tot_quadgrams += cur_quadgrms
               tot_quintagrams += cur_quintagrms
               tot_sextagrams += cur_sextagrms
+              tot_bleu1 += corpus_bleu(references, candidate, weights=(1, 0, 0, 0), smoothing_function=SmoothingFunction().method1)
+              tot_bleu2 += corpus_bleu(references, candidate, weights=(0.5, 0.5, 0, 0), smoothing_function=SmoothingFunction().method1)
+              tot_bleu3 += corpus_bleu(references, candidate, weights=(0.33, 0.33, 0.33, 0),smoothing_function= SmoothingFunction().method1)
+              tot_bleu4 += corpus_bleu(references, candidate, weights=(0.25, 0.25, 0.25, 0.25), smoothing_function=SmoothingFunction().method1)
               
               sum_ngrams = cur_unigrms + cur_bigrms + cur_trigrms + cur_quadgrms + cur_quintagrms + cur_sextagrms
               
-              # Save sentence with max ngrams sum
-              if (sum_ngrams > max_sum_ngrams):
-                  max_sum_ngrams = sum_ngrams
-                  best_ngrams_sentence = samples
+              # Print 10 sentences in total
+              if (ii % (N/10) == 0):
+                  print (samples + ". Sum nGrams: %.3f" % sum_ngrams)
+          
+          _, unique_unigrams = percentage_real(all_unigrams, unigrams)
+          _, unique_bigrams = percentage_real(all_bigrams, bigrams)
+          _, unique_trigrams = percentage_real(all_trigrams, trigrams)
+          _, unique_quadgrams = percentage_real(all_quadgrams, quadgrams)
+          _, unique_quintagrams = percentage_real(all_quintagrams, quintagrams)
+          _, unique_sextagrams = percentage_real(all_sextagrams, sextagrams)
           
           print ("")
+          print ("Averaging over " + str(N) + " iterations:")
+          print ("----------------------------------------")
           print ("Unigrams %.3f" % (tot_unigrams/N))
           print ("Bigrams %.3f" % (tot_bigrams/N))
           print ("Trigrams %.3f" % (tot_trigrams/N))
           print ("Quadgrams %.3f" % (tot_quadgrams/N))
           print ("Quintagrams %.3f" % (tot_quintagrams/N))
           print ("Sextagrams %.3f" % (tot_sextagrams/N))
-          print ("")
-          print ("Max nGrams sum sentence: " + best_ngrams_sentence)
+          print ('BLEU-1: %f' % (tot_bleu1 / N))
+          print ('BLEU-2: %f' % (tot_bleu2 / N))
+          print ('BLEU-3: %f' % (tot_bleu3 / N))
+          print ('BLEU-4: %f' % (tot_bleu4 / N))
+          print ('%d unique unigrams' % unique_unigrams)
+          print ('%d unique bigrams' % unique_bigrams)
+          print ('%d unique trigrams' % unique_trigrams)
+          print ('%d unique quadgrams' % unique_quadgrams)
+          print ('%d unique quintagrams' % unique_quintagrams)
+          print ('%d unique sextagrams' % unique_sextagrams)
+
           
       if (FLAGS.train_gan or FLAGS.train_lm):
           for i in range(config.max_max_epoch):
@@ -870,7 +957,7 @@ def main(_):
     
             lr_decay = config.lr_decay ** max(i - config.max_epoch, 0.0)
             mGenLM.assign_lr(session, config.learning_rate * lr_decay)
-            if (FLAGS.train_lm and not FLAGS.train_gan):  
+            if (FLAGS.train_lm and not FLAGS.train_gan):
                 print("Epoch: %d Learning rate: %.3f" % ((i + 1), session.run(mGenLM.lr)))
                 train_perplexity = run_lm_epoch(session, 
                                                 mGenLM, 
@@ -889,9 +976,10 @@ def main(_):
                                                                dLoss=dLoss,
                                                                gLoss=gLoss,
                                                                dOpt=dOpt,
-                                                               gOpt=gOpt,
+                                                               gOpt=gLossOpt,
                                                                is_train=True, 
                                                                verbose=True)
+                print("Epoch: %d dLossReal: %.3f dLossFake: %.3f dLoss: %.3f gLoss: %.3f" % (i+1, dLosReal, dLosFake, dLos, gLos))
             elif (FLAGS.train_gan and FLAGS.train_lm):
                 print("Epoch: %d" % ((i + 1)))
                 dLosReal, dLosFake, dLos, gLos, train_perplexity = run_dual_epoch(session,
@@ -908,10 +996,14 @@ def main(_):
                                                                                   epoch_num=i,
                                                                                   is_train=True,
                                                                                   verbose=True)
+                print("Epoch: %d dLossReal: %.3f dLossFake: %.3f dLoss: %.3f gLoss: %.3f" % (i+1, dLosReal, dLosFake, dLos, gLos))
                 print("Epoch: %d Train Perplexity: %.3f" % (i + 1, train_perplexity))
             valid_perplexity = run_lm_epoch(session, mvalidGen, valid_data)
             print("Epoch: %d Valid Perplexity: %.3f" % (i + 1, valid_perplexity))
             if valid_perplexity < old_valid_perplexity:
+              if (FLAGS.save_embeddings):
+                  np.save(os.path.join(FLAGS.data_path, FLAGS.file_prefix + "_embeddings"), 
+                          session.run(mGenLM.embedding))
               old_valid_perplexity = valid_perplexity
               sv.saver.save(session, FLAGS.save_path, i)
             elif valid_perplexity >= 1.3*old_valid_perplexity:
