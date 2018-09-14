@@ -62,6 +62,9 @@ sys.stdout = sys.stderr
 import numpy as np
 import tensorflow as tf
 import os
+import csv
+from nltk.translate.bleu_score import corpus_bleu
+from nltk.translate.bleu_score import SmoothingFunction
 
 import reader
 
@@ -564,7 +567,7 @@ def percentage_real(samples_grams, real_grams):
         if g in real_grams:
             grams_in_real += 1
     if len(samples_grams) > 0:
-        return grams_in_real * 1.0 / len(samples_grams)
+        return grams_in_real * 1.0 / len(samples_grams), grams_in_real
     return 0
 
 def do_sample(session, model, data, num_samples):
@@ -834,11 +837,20 @@ def main(_):
     with sv.managed_session() as session:
       if FLAGS.sample_mode:
         
+        testFile = os.path.join(FLAGS.data_path, FLAGS.file_prefix + ".test.txt")
+        
+        # Load references
+        references = []
+        with open(testFile) as inputfile:
+            for row in csv.reader(inputfile):
+                references.append((row[0] + "<eos>").decode("utf-8").split())
+        references = [references]
+                
         # Load ngrams
-        with open(os.path.join(FLAGS.data_path, FLAGS.file_prefix + ".test.txt")) as f:
+        with open(testFile) as f:
             lines = f.readlines()   
-        unigrams, bigrams, trigrams, quadgrams, quintagrams, sextagrams = get_grams(lines)
-
+        unigrams, bigrams, trigrams, quadgrams, quintagrams, sextagrams = get_grams(lines)       
+        
         while True:
           inpt = raw_input("Enter your sample prefix: ")
           cnt = int(raw_input("Sample size: "))
@@ -854,24 +866,41 @@ def main(_):
           tot_quadgrams = 0.0
           tot_quintagrams = 0.0
           tot_sextagrams = 0.0
-          max_sum_ngrams = 0.0
-          best_ngrams_sentence = None
-          max_sextagrams = 0.0
-          best_sextagram_sentence = "< No sextagram sentence was generated >"
+          tot_bleu1 = 0.0
+          tot_bleu2 = 0.0
+          tot_bleu3 = 0.0
+          tot_bleu4 = 0.0
+          all_unigrams = {}
+          all_bigrams = {}
+          all_trigrams = {}
+          all_quadgrams = {}
+          all_quintagrams = {}
+          all_sextagrams = {}
             
-          N = 1000
+          N = 100
           
           for ii in range(N):
               samples = str(inpt) + " " + str(pretty_print(do_sample(session, mtestGen, [word_to_id[word] for word in seed_for_sample], cnt), config.is_char_model, id_2_word))
               samples_unigrams, samples_bigrams, samples_trigrams, samples_quadgrams, samples_quintagrams, samples_sextagrams = get_grams([samples])
               
+              # Append ngrams to a single dict
+              all_unigrams.update(samples_unigrams)
+              all_bigrams.update(samples_bigrams)
+              all_trigrams.update(samples_trigrams)
+              all_quadgrams.update(samples_quadgrams)
+              all_quintagrams.update(samples_quintagrams)
+              all_sextagrams.update(samples_sextagrams)
+              
               # Compute current score
-              cur_unigrms = percentage_real(samples_unigrams, unigrams)
-              cur_bigrms = percentage_real(samples_bigrams, bigrams)
-              cur_trigrms = percentage_real(samples_trigrams, trigrams)
-              cur_quadgrms = percentage_real(samples_quadgrams, quadgrams)
-              cur_quintagrms = percentage_real(samples_quintagrams, quintagrams)
-              cur_sextagrms = percentage_real(samples_sextagrams, sextagrams)
+              cur_unigrms, _ = percentage_real(samples_unigrams, unigrams)
+              cur_bigrms, _ = percentage_real(samples_bigrams, bigrams)
+              cur_trigrms, _ = percentage_real(samples_trigrams, trigrams)
+              cur_quadgrms, _ = percentage_real(samples_quadgrams, quadgrams)
+              cur_quintagrms, _ = percentage_real(samples_quintagrams, quintagrams)
+              cur_sextagrms, _ = percentage_real(samples_sextagrams, sextagrams)
+              
+              # Current candidate
+              candidate = [samples.decode("utf-8").split()]
               
               # Add to total sum
               tot_unigrams += cur_unigrms
@@ -880,22 +909,23 @@ def main(_):
               tot_quadgrams += cur_quadgrms
               tot_quintagrams += cur_quintagrms
               tot_sextagrams += cur_sextagrms
+              tot_bleu1 += corpus_bleu(references, candidate, weights=(1, 0, 0, 0), smoothing_function=SmoothingFunction().method1)
+              tot_bleu2 += corpus_bleu(references, candidate, weights=(0.5, 0.5, 0, 0), smoothing_function=SmoothingFunction().method1)
+              tot_bleu3 += corpus_bleu(references, candidate, weights=(0.33, 0.33, 0.33, 0),smoothing_function= SmoothingFunction().method1)
+              tot_bleu4 += corpus_bleu(references, candidate, weights=(0.25, 0.25, 0.25, 0.25), smoothing_function=SmoothingFunction().method1)
               
               sum_ngrams = cur_unigrms + cur_bigrms + cur_trigrms + cur_quadgrms + cur_quintagrms + cur_sextagrms
               
-              # Save sentence with max ngrams sum
-              if (sum_ngrams > max_sum_ngrams):
-                  max_sum_ngrams = sum_ngrams
-                  best_ngrams_sentence = samples
-                  
-              # Save sentence with best sextagram score
-              if (cur_sextagrms > max_sextagrams):
-                  max_sextagrams = cur_sextagrms
-                  best_sextagram_sentence = samples
-              
-              # Print sentence every 10 iterations
-              if (ii % 10 == 0):
-                  print (samples + ". Sum nGrams: " + str(sum_ngrams))
+              # Print 10 sentences in total
+              if (ii % (N/10) == 0):
+                  print (samples + ". Sum nGrams: %.3f" % sum_ngrams)
+          
+          _, unique_unigrams = percentage_real(all_unigrams, unigrams)
+          _, unique_bigrams = percentage_real(all_bigrams, bigrams)
+          _, unique_trigrams = percentage_real(all_trigrams, trigrams)
+          _, unique_quadgrams = percentage_real(all_quadgrams, quadgrams)
+          _, unique_quintagrams = percentage_real(all_quintagrams, quintagrams)
+          _, unique_sextagrams = percentage_real(all_sextagrams, sextagrams)
           
           print ("")
           print ("Averaging over " + str(N) + " iterations:")
@@ -906,8 +936,17 @@ def main(_):
           print ("Quadgrams %.3f" % (tot_quadgrams/N))
           print ("Quintagrams %.3f" % (tot_quintagrams/N))
           print ("Sextagrams %.3f" % (tot_sextagrams/N))
-          print ("Best nGrams sum sentence: " + best_ngrams_sentence)
-          print ("Best sextagram sentence: " + best_sextagram_sentence)
+          print ('BLEU-1: %f' % (tot_bleu1 / N))
+          print ('BLEU-2: %f' % (tot_bleu2 / N))
+          print ('BLEU-3: %f' % (tot_bleu3 / N))
+          print ('BLEU-4: %f' % (tot_bleu4 / N))
+          print ('%d unique unigrams' % unique_unigrams)
+          print ('%d unique bigrams' % unique_bigrams)
+          print ('%d unique trigrams' % unique_trigrams)
+          print ('%d unique quadgrams' % unique_quadgrams)
+          print ('%d unique quintagrams' % unique_quintagrams)
+          print ('%d unique sextagrams' % unique_sextagrams)
+
           
       if (FLAGS.train_gan or FLAGS.train_lm):
           for i in range(config.max_max_epoch):
