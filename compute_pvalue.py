@@ -20,7 +20,7 @@ parser = argparse.ArgumentParser()
 
 parser.add_argument("--data_path", default = "./logs/", help="Directory of .npy files of both models")
 parser.add_argument("--suffix1", default = "gan", help="Suffix for data files of first model")
-parser.add_argument("--suffix2", default = "lm", help="Suffix for data files of second model")
+parser.add_argument("--suffix2", default = "mle", help="Suffix for data files of second model")
 
 args = parser.parse_args()
 
