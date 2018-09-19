@@ -4,11 +4,11 @@ To reproduce the results follow the following instructions:
 
 ##### Train the baseline MLE model
 * python ptb_word_lm.py --data_path=data/ --save_path=mle/ --train_lm --total_epochs=13 --save_embeddings
-* Test set perplexity will be printed at the end
+* Test set perplexity will be printed at the end.
 
 ##### Train the MLE-GAN model
 * python ptb_word_lm.py --data_path=data/ --save_path=gan/ --train_lm --train_gan --load_embeddings --lm_lr=2e-3 --g_lr=2e-3 --d_lr=5e-4 --gan_steps=40 --toal_epochs=26
-* Test set perplexity will be printed at the end
+* Test set perplexity will be printed at the end.
 
 #### Test MLE model and save evaluation metrics
 * python ptb_word_lm.py --data_path=data/ --save_path=mle/ --sample_mode --npy_suffix=mle
