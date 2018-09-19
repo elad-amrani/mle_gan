@@ -13,43 +13,17 @@
 # limitations under the License.
 # ==============================================================================
 
-"""Example / benchmark for building a PTB LSTM model.
+""" MLE-GAN Model
 
-Trains the model described in:
+GAN feature is based on the model described in:
+    Better Text Generation with MLE-GAN
+Authors:
+    Elad Amrani
+    Noam Yefet
+
+Initial baseline model is based on:
 (Zaremba, et. al.) Recurrent Neural Network Regularization
 http://arxiv.org/abs/1409.2329
-
-There are 3 supported model configurations:
-===========================================
-| config | epochs | train | valid  | test
-===========================================
-| small  | 13     | 37.99 | 121.39 | 115.91
-| medium | 39     | 48.45 |  86.16 |  82.07
-| large  | 55     | 37.87 |  82.62 |  78.29
-The exact results may vary depending on the random initialization.
-
-The hyperparameters used in the model:
-- init_scale - the initial scale of the weights
-- learning_rate - the initial value of the learning rate
-- max_grad_norm - the maximum permissible norm of the gradient
-- num_layers - the number of LSTM layers
-- num_steps - the number of unrolled steps of LSTM
-- hidden_size - the number of LSTM units
-- max_epoch - the number of epochs trained with the initial learning rate
-- max_max_epoch - the total number of epochs for training
-- keep_prob - the probability of keeping weights in the dropout layer
-- lr_decay - the decay of the learning rate for each epoch after "max_epoch"
-- batch_size - the batch size
-
-The data required for this example is in the data/ dir of the
-PTB dataset from Tomas Mikolov's webpage:
-
-$ wget http://www.fit.vutbr.cz/~imikolov/rnnlm/simple-examples.tgz
-$ tar xvf simple-examples.tgz
-
-To run:
-
-$ python ptb_word_lm.py --data_path=simple-examples/data/
 
 """
 from __future__ import absolute_import
@@ -93,9 +67,13 @@ flags.DEFINE_bool("load_embeddings", False,
 flags.DEFINE_string("d_arch", "nn",
                     "Discriminator architecture. nn / dnn / lstm.")
 flags.DEFINE_string("file_prefix", "ptb",
-                  "will be looking for file_prefix.train.txt, file_prefix.test.txt and file_prefix.valid.txt in data_path")
-flags.DEFINE_string("seed_for_sample", "i am",
-                  "supply seeding phrase here. it must only contain words from vocabluary")
+                    "will be looking for file_prefix.train.txt, file_prefix.test.txt and file_prefix.valid.txt in data_path")
+flags.DEFINE_string("seed_for_sample", "the",
+                    "supply seeding phrase here. it must only contain words from vocabluary")
+flags.DEFINE_string("npy_suffix", None,
+                    "Used for saving numpy files of sample_mode statistics. Numpy files are used to compute p-value.")
+flags.DEFINE_string("log_path", "./logs/",
+                    "Log directory path. Used to store sample_mode statistics")
 flags.DEFINE_integer('gan_steps', 10,
                      'Train discriminator / generator for gan_steps mini-batches before switching (in dual mode)')
 flags.DEFINE_integer('d_steps', 10,
@@ -535,8 +513,6 @@ def get_grams(lines):
     bigrams = dict()
     trigrams = dict()
     quadgrams = dict()
-    quintagrams = dict()
-    sextagrams = dict()
     token_count = 0
 
     for l in lines_joined:
@@ -552,12 +528,8 @@ def get_grams(lines):
                 trigrams[(l[i - 2], l[i - 1], l[i])] = trigrams.get((l[i - 2], l[i - 1], l[i]), 0) + 1
             if i >= 3:
                 quadgrams[(l[i - 3], l[i - 2], l[i - 1], l[i])] = quadgrams.get((l[i - 3], l[i - 2], l[i - 1], l[i]), 0) + 1
-            if i >= 4:
-                quintagrams[(l[i - 4], l[i - 3], l[i - 2], l[i - 1], l[i])] = quintagrams.get((l[i - 4], l[i - 3], l[i - 2], l[i - 1], l[i]), 0) + 1
-            if i >= 5:
-                sextagrams[(l[i - 5], l[i - 4], l[i - 3], l[i - 2], l[i - 1], l[i])] = sextagrams.get((l[i - 5], l[i - 4], l[i - 3], l[i - 2], l[i - 1], l[i]), 0) + 1
-
-    return unigrams, bigrams, trigrams, quadgrams, quintagrams, sextagrams
+            
+    return unigrams, bigrams, trigrams, quadgrams
 
 
 def percentage_real(samples_grams, real_grams):
@@ -849,7 +821,7 @@ def main(_):
         # Load ngrams
         with open(testFile) as f:
             lines = f.readlines()   
-        unigrams, bigrams, trigrams, quadgrams, quintagrams, sextagrams = get_grams(lines)       
+        unigrams, bigrams, trigrams, quadgrams = get_grams(lines)       
         
         while True:
           inpt = raw_input("Enter your sample prefix: ")
@@ -860,92 +832,89 @@ def main(_):
           else:
             seed_for_sample = inpt.split()
             
-          tot_unigrams = 0.0
-          tot_bigrams = 0.0
-          tot_trigrams = 0.0
-          tot_quadgrams = 0.0
-          tot_quintagrams = 0.0
-          tot_sextagrams = 0.0
-          tot_bleu1 = 0.0
-          tot_bleu2 = 0.0
-          tot_bleu3 = 0.0
-          tot_bleu4 = 0.0
+          N = 3
+          
+          tot_unigrams = np.zeros((N,1))
+          tot_bigrams = np.zeros((N,1))
+          tot_trigrams = np.zeros((N,1))
+          tot_quadgrams = np.zeros((N,1))
+          tot_bleu1 = np.zeros((N,1))
+          tot_bleu2 = np.zeros((N,1))
+          tot_bleu3 = np.zeros((N,1))
+          tot_bleu4 = np.zeros((N,1))
           all_unigrams = {}
           all_bigrams = {}
           all_trigrams = {}
           all_quadgrams = {}
-          all_quintagrams = {}
-          all_sextagrams = {}
-            
-          N = 100
           
           for ii in range(N):
               samples = str(inpt) + " " + str(pretty_print(do_sample(session, mtestGen, [word_to_id[word] for word in seed_for_sample], cnt), config.is_char_model, id_2_word))
-              samples_unigrams, samples_bigrams, samples_trigrams, samples_quadgrams, samples_quintagrams, samples_sextagrams = get_grams([samples])
+              samples_unigrams, samples_bigrams, samples_trigrams, samples_quadgrams = get_grams([samples])
               
               # Append ngrams to a single dict
               all_unigrams.update(samples_unigrams)
               all_bigrams.update(samples_bigrams)
               all_trigrams.update(samples_trigrams)
               all_quadgrams.update(samples_quadgrams)
-              all_quintagrams.update(samples_quintagrams)
-              all_sextagrams.update(samples_sextagrams)
               
               # Compute current score
               cur_unigrms, _ = percentage_real(samples_unigrams, unigrams)
               cur_bigrms, _ = percentage_real(samples_bigrams, bigrams)
               cur_trigrms, _ = percentage_real(samples_trigrams, trigrams)
               cur_quadgrms, _ = percentage_real(samples_quadgrams, quadgrams)
-              cur_quintagrms, _ = percentage_real(samples_quintagrams, quintagrams)
-              cur_sextagrms, _ = percentage_real(samples_sextagrams, sextagrams)
               
               # Current candidate
               candidate = [samples.decode("utf-8").split()]
               
               # Add to total sum
-              tot_unigrams += cur_unigrms
-              tot_bigrams += cur_bigrms
-              tot_trigrams += cur_trigrms
-              tot_quadgrams += cur_quadgrms
-              tot_quintagrams += cur_quintagrms
-              tot_sextagrams += cur_sextagrms
-              tot_bleu1 += corpus_bleu(references, candidate, weights=(1, 0, 0, 0), smoothing_function=SmoothingFunction().method1)
-              tot_bleu2 += corpus_bleu(references, candidate, weights=(0.5, 0.5, 0, 0), smoothing_function=SmoothingFunction().method1)
-              tot_bleu3 += corpus_bleu(references, candidate, weights=(0.33, 0.33, 0.33, 0),smoothing_function= SmoothingFunction().method1)
-              tot_bleu4 += corpus_bleu(references, candidate, weights=(0.25, 0.25, 0.25, 0.25), smoothing_function=SmoothingFunction().method1)
+              tot_unigrams[ii] = cur_unigrms
+              tot_bigrams[ii] = cur_bigrms
+              tot_trigrams[ii] = cur_trigrms
+              tot_quadgrams[ii] = cur_quadgrms
+              tot_bleu1[ii] = corpus_bleu(references, candidate, weights=(1, 0, 0, 0), smoothing_function=SmoothingFunction().method1)
+              tot_bleu2[ii] = corpus_bleu(references, candidate, weights=(0.5, 0.5, 0, 0), smoothing_function=SmoothingFunction().method1)
+              tot_bleu3[ii] = corpus_bleu(references, candidate, weights=(0.33, 0.33, 0.33, 0),smoothing_function= SmoothingFunction().method1)
+              tot_bleu4[ii] = corpus_bleu(references, candidate, weights=(0.25, 0.25, 0.25, 0.25), smoothing_function=SmoothingFunction().method1)
               
-              sum_ngrams = cur_unigrms + cur_bigrms + cur_trigrms + cur_quadgrms + cur_quintagrms + cur_sextagrms
+              sum_ngrams = cur_unigrms + cur_bigrms + cur_trigrms + cur_quadgrms
               
-              # Print 10 sentences in total
-              if (ii % (N/10) == 0):
-                  print (samples + ". Sum nGrams: %.3f" % sum_ngrams)
+              # Print 100 sentences in total
+              if (ii % (N/100) == 0):
+                  print (samples + ". Sum nGrams: %.3f, #%d/%d" % (sum_ngrams,ii,N))
           
           _, unique_unigrams = percentage_real(all_unigrams, unigrams)
           _, unique_bigrams = percentage_real(all_bigrams, bigrams)
           _, unique_trigrams = percentage_real(all_trigrams, trigrams)
           _, unique_quadgrams = percentage_real(all_quadgrams, quadgrams)
-          _, unique_quintagrams = percentage_real(all_quintagrams, quintagrams)
-          _, unique_sextagrams = percentage_real(all_sextagrams, sextagrams)
           
           print ("")
           print ("Averaging over " + str(N) + " iterations:")
           print ("----------------------------------------")
-          print ("Unigrams %.3f" % (tot_unigrams/N))
-          print ("Bigrams %.3f" % (tot_bigrams/N))
-          print ("Trigrams %.3f" % (tot_trigrams/N))
-          print ("Quadgrams %.3f" % (tot_quadgrams/N))
-          print ("Quintagrams %.3f" % (tot_quintagrams/N))
-          print ("Sextagrams %.3f" % (tot_sextagrams/N))
-          print ('BLEU-1: %f' % (tot_bleu1 / N))
-          print ('BLEU-2: %f' % (tot_bleu2 / N))
-          print ('BLEU-3: %f' % (tot_bleu3 / N))
-          print ('BLEU-4: %f' % (tot_bleu4 / N))
+          print ("Unigrams %f" % (tot_unigrams.mean()))
+          print ("Bigrams %f" % (tot_bigrams.mean()))
+          print ("Trigrams %f" % (tot_trigrams.mean()))
+          print ("Quadgrams %f" % (tot_quadgrams.mean()))
+          print ('BLEU-1: %f' % (tot_bleu1.mean()))
+          print ('BLEU-2: %f' % (tot_bleu2.mean()))
+          print ('BLEU-3: %f' % (tot_bleu3.mean()))
+          print ('BLEU-4: %f' % (tot_bleu4.mean()))
           print ('%d unique unigrams' % unique_unigrams)
           print ('%d unique bigrams' % unique_bigrams)
           print ('%d unique trigrams' % unique_trigrams)
           print ('%d unique quadgrams' % unique_quadgrams)
-          print ('%d unique quintagrams' % unique_quintagrams)
-          print ('%d unique sextagrams' % unique_sextagrams)
+          
+          # Save statistics to file
+          if (FLAGS.npy_suffix != None): 
+              if not os.path.exists(FLAGS.log_path):
+                  os.makedirs(FLAGS.log_path)  
+              np.save(FLAGS.log_path+"tot_unigrams_"+FLAGS.npy_suffix,tot_unigrams)
+              np.save(FLAGS.log_path+"tot_bigrams_"+FLAGS.npy_suffix,tot_bigrams)
+              np.save(FLAGS.log_path+"tot_trigrams_"+FLAGS.npy_suffix,tot_trigrams)
+              np.save(FLAGS.log_path+"tot_quadgrams_"+FLAGS.npy_suffix,tot_quadgrams)
+              np.save(FLAGS.log_path+"tot_bleu1_"+FLAGS.npy_suffix,tot_bleu1)
+              np.save(FLAGS.log_path+"tot_bleu2_"+FLAGS.npy_suffix,tot_bleu2)   
+              np.save(FLAGS.log_path+"tot_bleu3_"+FLAGS.npy_suffix,tot_bleu3)
+              np.save(FLAGS.log_path+"tot_bleu4_"+FLAGS.npy_suffix,tot_bleu4)
 
           
       if (FLAGS.train_gan or FLAGS.train_lm):
