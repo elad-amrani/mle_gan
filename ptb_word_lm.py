@@ -832,7 +832,7 @@ def main(_):
           else:
             seed_for_sample = inpt.split()
             
-          N = 3
+          N = 1000
           
           tot_unigrams = np.zeros((N,1))
           tot_bigrams = np.zeros((N,1))
