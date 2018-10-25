@@ -1,6 +1,6 @@
 # Better Text Generation with MLE-GAN
 
-To reproduce the results follow the following instructions:
+To reproduce the results from the paper follow the following instructions:
 
 ##### Train the baseline MLE model
 * python ptb_word_lm.py --data_path=data/ --save_path=mle/ --train_lm --total_epochs=13 --save_embeddings
